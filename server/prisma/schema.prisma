@@ -1,0 +1,62 @@
+datasource db {
+  provider  = "postgresql" 
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  password      String?
+  name          String
+  authProvider  String    @default("local")
+  image         String?
+  role          String    @default("USER")
+  documents     Document[]
+  chatSessions  ChatSession[]
+  createdAt     DateTime  @default(now())
+}
+
+model Document {
+  id        String   @id @default(cuid())
+  name      String
+  size      Int
+  status    String   @default("PROCESSING")
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  chunks    Chunk[]
+  createdAt DateTime @default(now())
+}
+
+model Chunk {
+  id         String   @id @default(cuid())
+  content    String
+  // Stored as pgvector
+  embedding  Unsupported("vector")?
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id])
+}
+
+model ChatSession {
+  id        String    @id @default(cuid())
+  title     String
+  userId    String
+  user      User      @relation(fields: [userId], references: [id])
+  messages  Message[]
+  createdAt DateTime  @default(now())
+}
+
+model Message {
+  id            String      @id @default(cuid())
+  role          String      // "user" or "assistant"
+  content       String
+  sources       Json?       // Array of { documentName, chunkId }
+  sessionId     String
+  chatSession   ChatSession @relation(fields: [sessionId], references: [id])
+  createdAt     DateTime    @default(now())
+}
+
