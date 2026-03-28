@@ -14,8 +14,14 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 4000;
 
+const allowedOrigins = [
+  process.env.CLIENT_URL,
+  'http://localhost:5173',
+  'https://ai-doc-summer.vercel.app'
+].filter(Boolean) as string[];
+
 app.use(cors({ 
-  origin: process.env.CLIENT_URL || '*', 
+  origin: allowedOrigins.length > 0 ? allowedOrigins : '*',
   credentials: true 
 }));
 app.use(express.json());
