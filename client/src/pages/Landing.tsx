@@ -1,10 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { motion, useScroll, useTransform, useSpring } from 'framer-motion';
+import { motion, useScroll, useTransform } from 'framer-motion';
 import { 
   Sparkles, ArrowRight, Brain, Zap, Shield, LogOut, MessageSquare, 
   Database, ChevronRight, Layout, CheckCircle2, 
-  Code2, Users, Building2, Terminal, Globe, Cpu
+  Code2, Users, Building2, Globe, Cpu
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
@@ -16,8 +16,6 @@ export default function Landing() {
   // Parallax effects
   const y1 = useTransform(scrollY, [0, 500], [0, 200]);
   const y2 = useTransform(scrollY, [0, 500], [0, -150]);
-  const opacity = useTransform(scrollY, [0, 200], [1, 0]);
-  const scale = useTransform(scrollY, [0, 300], [1, 0.9]);
 
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 20);

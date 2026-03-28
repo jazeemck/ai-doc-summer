@@ -42,6 +42,7 @@
     "@types/passport": "^1.0.17",
     "@types/passport-google-oauth20": "^2.0.17",
     "@types/pdf-parse": "^1.1.5",
+    "@vercel/node": "^3.0.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }

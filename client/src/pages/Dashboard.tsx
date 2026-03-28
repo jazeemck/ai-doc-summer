@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate, Link } from 'react-router-dom';
 import { useDropzone } from 'react-dropzone';
@@ -27,7 +27,6 @@ export default function Dashboard() {
   
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
   const [uploading, setUploading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   const fetchDocuments = async () => {
     try {
@@ -48,7 +47,6 @@ export default function Dashboard() {
     if (acceptedFiles.length === 0) return;
     
     setUploading(true);
-    setError(null);
     const formData = new FormData();
     acceptedFiles.forEach(file => {
       formData.append('files', file);
@@ -69,7 +67,6 @@ export default function Dashboard() {
       fetchDocuments();
     } catch (err: any) {
       console.error('Upload failed', err);
-      setError(err.response?.data?.error || 'Failed to upload files');
     } finally {
       setUploading(false);
     }
