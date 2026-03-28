@@ -12,7 +12,7 @@ import api from '../lib/api';
 import { supabase } from '../lib/supabaseClient';
 import TextareaAutosize from 'react-textarea-autosize';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
+const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
 interface Message {
   id: string;

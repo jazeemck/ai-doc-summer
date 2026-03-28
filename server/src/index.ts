@@ -14,6 +14,7 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 4000;
 
+// Flexible CORS: allow local dev and production domains
 const allowedOrigins = [
   process.env.CLIENT_URL,
   'http://localhost:5173',
@@ -21,9 +22,21 @@ const allowedOrigins = [
 ].filter(Boolean) as string[];
 
 app.use(cors({ 
-  origin: allowedOrigins.length > 0 ? allowedOrigins : '*',
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true 
 }));
+
+// Request logger for production debugging
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  next();
+});
 app.use(express.json());
 app.use(cookieParser());
 

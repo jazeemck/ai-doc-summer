@@ -5,8 +5,8 @@ const ai = new GoogleGenAI({
   apiVersion: 'v1beta' // Crucial for systemInstruction and latest models
 });
 
-const DEFAULT_MODEL = 'gemini-flash-latest';
-const EMBED_MODEL = 'gemini-embedding-001';
+const DEFAULT_MODEL = 'gemini-1.5-flash-latest';
+const EMBED_MODEL = 'text-embedding-004'; // More standard embedding model
 
 export const aiService = {
   /**
@@ -54,7 +54,7 @@ export const aiService = {
       
       const result = await ai.models.embedContent({
         model: EMBED_MODEL,
-        contents: trimmedText,
+        contents: [{ parts: [{ text: trimmedText }] }],
       });
 
       const embedding = result.embedding?.values || result.embeddings?.[0]?.values;

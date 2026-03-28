@@ -176,22 +176,22 @@ router.post('/sessions/:id/messages', authenticate, async (req: AuthRequest, res
     if (vectorStr) {
       try {
         if (documentId) {
-          nearestChunks = await prisma.$queryRaw`
-            SELECT id, "documentId", content, (embedding <=> ${vectorStr}::vector) as distance
+          nearestChunks = await prisma.$queryRawUnsafe(`
+            SELECT id, "documentId", content, (embedding <=> $1::vector) as distance
             FROM "Chunk"
-            WHERE "documentId" = ${documentId}
+            WHERE "documentId" = $2
             ORDER BY distance ASC
             LIMIT 3;
-          `;
+          `, vectorStr, documentId);
         } else {
-          nearestChunks = await prisma.$queryRaw`
-            SELECT c.id, c."documentId", c.content, (c.embedding <=> ${vectorStr}::vector) as distance
+          nearestChunks = await prisma.$queryRawUnsafe(`
+            SELECT c.id, c."documentId", c.content, (c.embedding <=> $1::vector) as distance
             FROM "Chunk" c
             INNER JOIN "Document" d ON c."documentId" = d.id
-            WHERE d."userId" = ${req.user!.id}
+            WHERE d."userId" = $2
             ORDER BY distance ASC
             LIMIT 3;
-          `;
+          `, vectorStr, req.user!.id);
         }
       } catch (dbErr) {
         console.warn("Vector search failed:", dbErr);
