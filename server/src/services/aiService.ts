@@ -34,7 +34,12 @@ export const aiService = {
         };
       }
 
-      return await (ai.models as any).generateContentStream(payload);
+      const aiAny = ai as any;
+      const model = (aiAny.getGenerativeModel) 
+        ? aiAny.getGenerativeModel({ model: modelName })
+        : aiAny.models;
+
+      return await model.generateContentStream(payload);
     } catch (error: any) {
       console.error("Gemini API Error (Stream):", {
         status: error.status,
@@ -57,7 +62,8 @@ export const aiService = {
         contents: [{ parts: [{ text: trimmedText }] }],
       });
 
-      const embedding = result.embedding?.values || result.embeddings?.[0]?.values;
+      const resAny = result as any;
+      const embedding = resAny.embedding?.values || resAny.embeddings?.[0]?.values;
       
       if (!embedding) {
         throw new Error('No embedding returned from Gemini API');

@@ -1,0 +1,14 @@
+{
+  "name": "ai-doc-summer-root",
+  "private": true,
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "postinstall": "npm run postinstall --workspace=server",
+    "build:client": "cd client && npm run build",
+    "build:server": "cd server && npm run postinstall",
+    "build": "npm run build:client && npm run build:server"
+  }
+}

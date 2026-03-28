@@ -74,10 +74,15 @@ router.post('/', authenticate, upload.array('files'), async (req: AuthRequest, r
 
       if (mime === 'application/pdf' || extension === 'pdf') {
         try {
-          const parser = new PDFParse({ data: file.buffer });
-          const pdfData = await parser.getText();
-          rawText = pdfData.text || '';
-          await parser.destroy();
+          const pdfLib = require('pdf-parse');
+          if (typeof pdfLib === 'function') {
+            const data = await pdfLib(file.buffer);
+            rawText = data.text || '';
+          } else {
+            const parser = new (pdfLib.PDFParse || pdfLib)({ data: file.buffer });
+            const data = await parser.getText();
+            rawText = data.text || '';
+          }
           console.log(`[Upload] PDF extraction complete. Length: ${rawText.length}`);
         } catch (pdfErr: any) {
           console.error('[Upload] PDF Parse Error:', pdfErr);

@@ -53,9 +53,7 @@ export default function Dashboard() {
     });
 
     try {
-      const uploadPromise = api.post('/upload', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
-      });
+      const uploadPromise = api.post('/upload', formData);
       
       toast.promise(uploadPromise, {
         loading: 'Syncing to Neural Grid...',
