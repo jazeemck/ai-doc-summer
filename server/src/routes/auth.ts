@@ -98,9 +98,9 @@ router.post('/login', async (req, res) => {
 // Google OAuth Routes
 router.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
 
-router.get('/google/callback', passport.authenticate('google', { session: true, failureRedirect: 'http://localhost:5173/login?error=google_failed' }), (req, res) => {
+router.get('/google/callback', passport.authenticate('google', { session: true, failureRedirect: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/login?error=google_failed` }), (req, res) => {
   if (!req.user) {
-    return res.redirect('http://localhost:5173/login?error=google_failed');
+    return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/login?error=google_failed`);
   }
 
   const { token } = req.user as any; // The token is attached in the passport strategy
@@ -109,7 +109,7 @@ router.get('/google/callback', passport.authenticate('google', { session: true, 
   res.cookie('token', token, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax' });
   
   // Successful authentication, redirect to chat.
-  res.redirect('http://localhost:5173/chat');
+  res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/chat`);
 });
 
 router.get('/me', authenticate, async (req: AuthRequest, res) => {
