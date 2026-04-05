@@ -11,7 +11,7 @@
     },
     {
       "source": "/(.*)",
-      "destination": "client/$1"
+      "destination": "/$1"
     }
   ],
   "functions": {
@@ -20,5 +20,6 @@
       "maxDuration": 30
     }
   },
-  "installCommand": "npm install"
+  "installCommand": "npm install",
+  "outputDirectory": "client/dist"
 }
