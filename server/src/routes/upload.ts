@@ -4,21 +4,11 @@ import { PrismaClient } from '@prisma/client';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { aiService } from '../services/aiService';
 import { randomUUID } from 'crypto';
-
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const { PDFParse } = require('pdf-parse');
 import mammoth from 'mammoth';
 
 const router = express.Router();
 const prisma = new PrismaClient();
 const upload = multer({ storage: multer.memoryStorage() });
-
-// AI initialization moved to aiService.ts
-
-console.log(`[Upload] AI setup complete. API Key present: ${!!process.env.GEMINI_API_KEY}`);
-if (process.env.GEMINI_API_KEY) {
-  console.log(`[Upload] API Key starts with: ${process.env.GEMINI_API_KEY.substring(0, 7)}...`);
-}
 
 // Helper function to chunk text roughly by sentences.
 function chunkText(text: string, maxChunkLength: number = 2000): string[] {
@@ -40,6 +30,10 @@ function chunkText(text: string, maxChunkLength: number = 2000): string[] {
   return chunks;
 }
 
+router.get('/debug', (req, res) => {
+  res.json({ message: 'Upload route is alive' });
+});
+
 router.post('/', authenticate, upload.array('files'), async (req: AuthRequest, res) => {
   const reqAny = req as any;
   if (!reqAny.files || reqAny.files.length === 0) {
@@ -48,12 +42,11 @@ router.post('/', authenticate, upload.array('files'), async (req: AuthRequest, r
   }
 
   const files = reqAny.files as any[];
-  const uploadedDocs = [];
+  const uploadedDocs: any[] = [];
 
   for (const file of files) {
-    let documentId: string | null = null;
     try {
-      console.log(`[Upload] Processing file: ${file.originalname} (${file.mimetype}, ${file.size} bytes)`);
+      console.log(`[Upload] Init: ${file.originalname}`);
 
       // 1. Create Document record in PROCESSING state
       const document = await prisma.document.create({
@@ -64,118 +57,73 @@ router.post('/', authenticate, upload.array('files'), async (req: AuthRequest, r
           userId: req.user!.id,
         }
       });
-      documentId = document.id;
-      uploadedDocs.push(document);
 
-      // 2. Extract Text
-      let rawText = '';
-      const extension = file.originalname.toLowerCase().split('.').pop();
-      const mime = file.mimetype.toLowerCase();
+      // --- Synchronous Sync Logic for Vercel Reliability ---
+      try {
+        console.log(`[NeuralSync] Processing ${file.originalname}...`);
 
-      if (mime === 'application/pdf' || extension === 'pdf') {
-        try {
-          const pdfLib = require('pdf-parse');
-          if (typeof pdfLib === 'function') {
-            const data = await pdfLib(file.buffer);
-            rawText = data.text || '';
-          } else {
-            const parser = new (pdfLib.PDFParse || pdfLib)({ data: file.buffer });
-            const data = await parser.getText();
-            rawText = data.text || '';
-          }
-          console.log(`[Upload] PDF extraction complete. Length: ${rawText.length}`);
-        } catch (pdfErr: any) {
-          console.error('[Upload] PDF Parse Error:', pdfErr);
-          throw new Error(`PDF extraction failed: ${pdfErr.message || pdfErr}`);
-        }
-      } else if (mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || extension === 'docx') {
-        try {
+        // 2. Extract Text
+        let rawText = '';
+        const extension = file.originalname.toLowerCase().split('.').pop();
+        const mime = file.mimetype.toLowerCase();
+
+        if (mime === 'application/pdf' || extension === 'pdf') {
+          const pdfParse = require('pdf-parse');
+          const data = await pdfParse(file.buffer);
+          rawText = data.text || '';
+        } else if (mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || extension === 'docx') {
           const result = await mammoth.extractRawText({ buffer: file.buffer });
           rawText = result.value || '';
-          console.log(`[Upload] DOCX extraction complete. Length: ${rawText.length}`);
-        } catch (docxErr: any) {
-          console.error('[Upload] DOCX Parse Error:', docxErr);
-          throw new Error(`DOCX extraction failed: ${docxErr.message || docxErr}`);
+        } else {
+          rawText = file.buffer.toString('utf-8');
         }
-      } else if (mime.includes('text') || extension === 'md' || extension === 'txt' || extension === 'markdown') {
-        rawText = file.buffer.toString('utf-8');
-        console.log(`[Upload] Text/MD extraction complete. Length: ${rawText.length}`);
-      } else {
-        // Fallback: try reading as text
-        console.warn(`[Upload] Unknown format ${mime}. Attempting text fallback.`);
-        rawText = file.buffer.toString('utf-8');
-      }
 
-      if (!rawText.trim()) {
-        throw new Error('Document seems to be empty or could not be read.');
-      }
+        if (!rawText.trim()) throw new Error('Empty document');
 
-      // 3. Chunk Text
-      const chunks = chunkText(rawText);
-      console.log(`[Upload] Text split into ${chunks.length} chunks.`);
+        // 3. Chunking & Batch Embedding
+        const chunks = chunkText(rawText);
+        console.log(`[NeuralSync] ${chunks.length} chunks. Batching...`);
 
-      // 4. Generate Embeddings and Save
-      let successCount = 0;
-      for (let i = 0; i < chunks.length; i++) {
-        const chunkContent = chunks[i];
-        if (!chunkContent.trim()) continue;
+        const embeddings = await aiService.generateEmbeddingsBatch(chunks);
+        console.log(`[NeuralSync] Successfully embedded ${embeddings.length} chunks. Syncing to DB...`);
 
-        try {
-          // Get embedding via aiService
-          const embedding = await aiService.generateEmbedding(chunkContent);
-          if (!embedding) {
-            console.warn(`[Upload] No embedding returned for chunk ${i+1}`);
-            continue;
+        // 4. Bulk Insertion
+        for (let i = 0; i < chunks.length; i++) {
+          const content = chunks[i];
+          const embedding = embeddings[i];
+          if (embedding) {
+            const vectorStr = `[${embedding.join(',')}]`;
+            await prisma.$executeRaw`
+              INSERT INTO "Chunk" (id, content, "documentId", embedding)
+              VALUES (${randomUUID()}, ${content}, ${document.id}, ${vectorStr}::vector)
+            `;
           }
-
-          const vectorStr = `[${embedding.join(',')}]`;
-          const chunkId = randomUUID();
-
-          // Explicit SQL for pgvector with Prisma (requires cast)
-          await prisma.$executeRawUnsafe(`
-            INSERT INTO "Chunk" (id, content, "documentId", embedding)
-            VALUES ($1, $2, $3, $4::vector)
-          `, chunkId, chunkContent, document.id, vectorStr);
-          
-          successCount++;
-        } catch (error: any) {
-          console.error("Gemini API Error (Upload Embedding):", {
-            status: error.status,
-            message: error.message,
-            details: error
-          });
-          throw error; // Re-throw to catch block to mark doc as FAILED
         }
+
+        // 5. Success State
+        const updatedDoc = await prisma.document.update({
+          where: { id: document.id },
+          data: { status: 'COMPLETED' }
+        });
+        uploadedDocs.push(updatedDoc);
+        console.log(`[NeuralSync] Synchronized: ${file.originalname}`);
+
+      } catch (innerErr: any) {
+        console.error(`[NeuralSync] Critical Failure:`, innerErr.message);
+        const failedDoc = await prisma.document.update({
+          where: { id: document.id },
+          data: { status: 'FAILED' }
+        });
+        uploadedDocs.push(failedDoc);
       }
-
-      console.log(`[Upload] Successfully processed ${successCount} chunks for ${file.originalname}`);
-
-      // 5. Update Status
-      await prisma.document.update({
-        where: { id: document.id },
-        data: { status: 'COMPLETED' }
-      });
 
     } catch (err: any) {
-      const errMsg = err?.message || String(err);
-      console.error(`\n❌ Error processing file "${file.originalname}":`, err);
-      
-      // Update status to FAILED
-      if (documentId) {
-         await prisma.document.update({
-           where: { id: documentId },
-           data: { status: 'FAILED' }
-         }).catch((e: any) => console.error('Failed to update FAILED status:', e));
-      }
+      console.error(`[Upload] DB Error creating record:`, err.message);
     }
   }
 
-  // Fetch the current updated statuses from database before returning
-  const finalDocs = await prisma.document.findMany({
-    where: { id: { in: uploadedDocs.map(d => d.id) } }
-  });
-
-  res.json({ message: 'Files processed', documents: finalDocs });
+  // Response with final statuses
+  res.json({ message: 'Ingestion complete', documents: uploadedDocs });
 });
 
 export default router;

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { 
+import {
   LogOut, Send, MessageSquare, Plus, User as UserIcon, Settings,
   ChevronRight, Menu, Database, Copy, Upload, X,
   FileText, Loader2, AlertCircle, CheckCircle2, Sparkles,
@@ -118,7 +118,7 @@ export default function Chat() {
       setUploadedFile(null);
       setDocumentId(null);
       setInput('');
-      
+
       const { data } = await api.post('/chat/sessions', { title: 'New Neural Thread' });
       setSessions([data, ...sessions]);
       setActiveSession(data.id);
@@ -180,7 +180,7 @@ export default function Chat() {
       if (!response.ok) throw new Error('API Error');
 
       setLoading(false);
-      
+
       const currentSession = sessions.find(s => s.id === sessionId);
       if (!currentSession?.title || currentSession.title === 'New Neural Thread') {
         const newTitle = userMsg.length > 25 ? userMsg.substring(0, 25) + '...' : userMsg;
@@ -190,7 +190,7 @@ export default function Chat() {
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
       const astTempId = Date.now().toString() + '-ast';
-      
+
       setMessages(prev => [...prev, {
         id: astTempId,
         role: 'assistant',
@@ -225,7 +225,7 @@ export default function Chat() {
                     msg.id === astTempId ? { ...msg, sources: data.sources, sourceType: data.sourceType } : msg
                   ));
                 }
-              } catch (e) {}
+              } catch (e) { }
             }
           }
         }
@@ -263,6 +263,19 @@ export default function Chat() {
     scrollToBottom();
   }, [messages]);
 
+  // Neural Sync Polling: Automatically refresh library if any document is processing
+  useEffect(() => {
+    const hasProcessing = libraryDocuments.some(doc => doc.status === 'PROCESSING');
+    if (!hasProcessing) return;
+
+    const interval = setInterval(async () => {
+      console.log('[NeuralLink] Synchronizing state...');
+      await loadLibraryDocuments();
+    }, 5000); // Poll every 5 seconds
+
+    return () => clearInterval(interval);
+  }, [libraryDocuments]);
+
   const handleFileUpload = async (file: File) => {
     const allowedExtensions = /\.(pdf|docx|md|markdown|txt)$/i;
     if (!allowedExtensions.test(file.name)) {
@@ -294,11 +307,19 @@ export default function Chat() {
 
       const result = await response.json();
       const doc = result.documents?.[0];
-      if (doc && doc.status === 'COMPLETED') {
-        setDocumentId(doc.id);
-        showToast(`Memory ingested: ${file.name}`, 'success');
+
+      if (doc && (doc.status === 'COMPLETED' || doc.status === 'PROCESSING')) {
+        // Even if still processing, we add it to the library for live status updates
+        await loadLibraryDocuments();
+
+        if (doc.status === 'COMPLETED') {
+          setDocumentId(doc.id);
+          showToast(`Success! ${file.name} is now online.`, 'success');
+        } else {
+          showToast(`${file.name} is synchronizing...`, 'success');
+        }
       } else {
-        throw new Error('Processing failed');
+        throw new Error(doc?.message || 'Neural ingestion failed');
       }
     } catch (err: any) {
       setUploadedFile(null);
@@ -357,7 +378,7 @@ export default function Chat() {
           showToast(`Context Injected: ${data.name}`, 'success');
           return;
         }
-      } catch (err) {}
+      } catch (err) { }
     }
 
     const file = e.dataTransfer.files?.[0];
@@ -367,13 +388,13 @@ export default function Chat() {
   };
 
   return (
-    <div 
+    <div
       className="flex h-screen bg-background text-foreground font-sans overflow-hidden relative"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      
+
       <AnimatePresence>
         {isDragging && (
           <motion.div
@@ -398,7 +419,7 @@ export default function Chat() {
           </motion.div>
         )}
       </AnimatePresence>
-      
+
       <div className="fixed inset-0 z-0 pointer-events-none opacity-30">
         <div className="absolute top-[10%] right-[10%] w-[500px] h-[500px] bg-teal-500/10 blur-[150px] animate-fluid-1" />
         <div className="absolute bottom-[10%] left-[10%] w-[500px] h-[500px] bg-blue-500/10 blur-[150px] animate-fluid-2" />
@@ -406,7 +427,7 @@ export default function Chat() {
 
       <AnimatePresence>
         {sidebarOpen && (
-          <motion.div 
+          <motion.div
             initial={{ x: -280, opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
             exit={{ x: -280, opacity: 0 }}
@@ -420,7 +441,7 @@ export default function Chat() {
                 </div>
                 <span className="font-black text-xs tracking-[0.2em] text-white uppercase opacity-80">Cortex One</span>
               </Link>
-              <button 
+              <button
                 onClick={() => setSidebarOpen(false)}
                 className="p-2 text-slate-500 hover:text-white transition-colors"
               >
@@ -436,7 +457,7 @@ export default function Chat() {
                 <Plus size={16} />
                 <span>New Session</span>
               </button>
-              
+
               <button
                 onClick={() => navigate('/dashboard')}
                 className="btn-outline w-full flex items-center justify-center gap-2 py-2.5 !text-[11px] border-teal-500/10 text-teal-400 hover:bg-teal-500/5"
@@ -458,11 +479,10 @@ export default function Chat() {
                     <button
                       key={s.id}
                       onClick={() => setActiveSession(s.id)}
-                      className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all text-xs group ${
-                        activeSession === s.id
-                          ? 'bg-teal-500/10 text-teal-300 border border-teal-500/10 shadow-sm'
-                          : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
-                      }`}
+                      className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all text-xs group ${activeSession === s.id
+                        ? 'bg-teal-500/10 text-teal-300 border border-teal-500/10 shadow-sm'
+                        : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
+                        }`}
                     >
                       <MessageSquare size={14} className={activeSession === s.id ? 'text-teal-400' : 'text-slate-600 group-hover:text-slate-400'} />
                       <span className="truncate flex-1 text-left font-bold">{s.title}</span>
@@ -485,11 +505,10 @@ export default function Chat() {
                         setUploadedFile({ name: doc.name } as any);
                         showToast(`Context switched`, 'success');
                       }}
-                      className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl transition-all text-[10px] group ${
-                        documentId === doc.id
-                          ? 'bg-cyan-500/10 text-cyan-300 border border-cyan-500/10'
-                          : 'text-slate-600 hover:bg-white/5 active:scale-95'
-                      }`}
+                      className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl transition-all text-[10px] group ${documentId === doc.id
+                        ? 'bg-cyan-500/10 text-cyan-300 border border-cyan-500/10'
+                        : 'text-slate-600 hover:bg-white/5 active:scale-95'
+                        }`}
                     >
                       <FileText size={12} className={documentId === doc.id ? 'text-cyan-400' : 'text-slate-700'} />
                       <span className="truncate flex-1 text-left font-bold uppercase tracking-tight">{doc.name}</span>
@@ -508,7 +527,7 @@ export default function Chat() {
                   <p className="text-sm font-black text-white truncate uppercase tracking-tighter">Session User</p>
                   <p className="text-[10px] text-slate-500 truncate lowercase">{user?.email}</p>
                 </div>
-                <button 
+                <button
                   onClick={handleLogout}
                   className="p-2 text-slate-500 hover:text-red-400 transition-colors"
                 >
@@ -521,11 +540,11 @@ export default function Chat() {
       </AnimatePresence>
 
       <div className="flex-1 flex flex-col relative min-w-0 h-full overflow-hidden">
-        
+
         <header className="h-16 flex items-center justify-between px-8 border-b border-white/5 bg-background/50 backdrop-blur-2xl z-30">
           <div className="flex items-center gap-6">
             {!sidebarOpen && (
-              <button 
+              <button
                 onClick={() => setSidebarOpen(true)}
                 className="p-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-2xl transition-all text-white"
               >
@@ -542,7 +561,7 @@ export default function Chat() {
               <p className="text-[10px] text-slate-500 font-black uppercase tracking-[0.2em]">Quantum Encypted Tunnel</p>
             </div>
           </div>
-          
+
           <div className="flex items-center gap-4">
             {uploadedFile && (
               <div className="hidden md:flex items-center gap-3 px-4 py-2 bg-teal-500/10 border border-teal-500/20 rounded-full">
@@ -562,9 +581,9 @@ export default function Chat() {
 
         <div className="flex-1 overflow-y-auto overflow-x-hidden scroll-smooth scrollbar-hide py-12 px-6">
           <div className="max-w-3xl mx-auto space-y-12">
-            
+
             {messages.length === 0 ? (
-              <motion.div 
+              <motion.div
                 initial={{ opacity: 0, scale: 0.9 }}
                 animate={{ opacity: 1, scale: 1 }}
                 className="flex flex-col items-center justify-center pt-24 text-center"
@@ -607,14 +626,13 @@ export default function Chat() {
                     ) : (
                       <div className="glass-card p-6 rounded-[2rem] rounded-tl-sm border border-white/10 shadow-2xl text-slate-200 text-base leading-relaxed transition-all hover:border-white/20 group/msg relative">
                         {msg.sourceType && (
-                          <div className={`mb-3 inline-flex items-center gap-2 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${
-                            msg.sourceType === 'doc' ? 'bg-teal-500/20 text-teal-400 border border-teal-500/30' : 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                          }`}>
+                          <div className={`mb-3 inline-flex items-center gap-2 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${msg.sourceType === 'doc' ? 'bg-teal-500/20 text-teal-400 border border-teal-500/30' : 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                            }`}>
                             {msg.sourceType === 'doc' ? '📄 Document Answer' : '🌐 General Answer'}
                           </div>
                         )}
                         <div className="whitespace-pre-wrap">{msg.content}</div>
-                        
+
                         <div className="absolute -right-12 top-0 flex flex-col gap-2 opacity-0 group-hover/msg:opacity-100 transition-all">
                           <button
                             onClick={() => handleCopy(msg.id, msg.content)}
@@ -647,7 +665,7 @@ export default function Chat() {
                 </motion.div>
               ))
             )}
-            
+
             {loading && (
               <div className="flex gap-6 justify-start animate-pulse">
                 <div className="w-12 h-12 rounded-2xl bg-teal-500/10 border border-teal-500/20 flex items-center justify-center flex-shrink-0">
@@ -656,28 +674,28 @@ export default function Chat() {
                 <div className="h-20 w-48 glass-card border-none mt-2" />
               </div>
             )}
-            
+
             <div ref={messagesEndRef} className="h-24" />
           </div>
         </div>
 
         <div className="p-6 pt-0 bg-gradient-to-t from-background via-background/95 to-transparent z-40">
           <div className="max-w-3xl mx-auto relative group">
-            
+
             <div className={`relative transition-all duration-500 rounded-3xl p-1.5 border border-white/5 bg-white/5 backdrop-blur-3xl shadow-xl ${loading ? 'opacity-50 pointer-events-none' : 'hover:border-teal-500/20 hover:bg-white/10'}`}>
-              
+
               <div className="flex items-end gap-4">
-                <button 
+                <button
                   onClick={() => fileInputRef.current?.click()}
                   className="p-3 rounded-2xl bg-white/5 hover:bg-teal-500/10 border border-white/5 hover:border-teal-500/30 transition-all text-slate-500 hover:text-teal-400 group/upload"
                 >
                   {uploadLoading ? <Loader2 className="animate-spin" size={20} /> : <Upload size={20} />}
                 </button>
-                <input 
-                  ref={fileInputRef} 
-                  type="file" 
-                  className="hidden" 
-                  onChange={handleFileInputChange} 
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  onChange={handleFileInputChange}
                   accept=".pdf,.docx,.md,.markdown,.txt"
                 />
 
@@ -706,25 +724,25 @@ export default function Chat() {
                 </button>
               </div>
 
-                <div className="flex items-center gap-4 text-[10px] font-black uppercase tracking-widest text-slate-500">
+              <div className="flex items-center gap-4 text-[10px] font-black uppercase tracking-widest text-slate-500">
                 <div className="flex items-center gap-2">
                   <div className={`w-1.5 h-1.5 rounded-full ${loading ? 'bg-emerald-400 animate-pulse' : 'bg-slate-700'}`} />
                   {loading ? 'Processing Neural Token' : 'Neural Bridge Ready'}
                 </div>
-                
+
                 <div className="hidden md:flex items-center p-0.5 rounded-lg bg-black/40 border border-white/5 ml-4">
-                   <button 
+                  <button
                     onClick={() => setBridgeMode('smart')}
                     className={`px-3 py-1 rounded-md transition-all ${bridgeMode === 'smart' ? 'bg-teal-500/20 text-teal-400' : 'text-slate-600 hover:text-slate-400'}`}
-                   >
+                  >
                     Smart
-                   </button>
-                   <button 
+                  </button>
+                  <button
                     onClick={() => setBridgeMode('doc')}
                     className={`px-3 py-1 rounded-md transition-all ${bridgeMode === 'doc' ? 'bg-teal-500/20 text-teal-400' : 'text-slate-600 hover:text-slate-400'}`}
-                   >
+                  >
                     Doc-Only
-                   </button>
+                  </button>
                 </div>
               </div>
             </div>
@@ -736,13 +754,12 @@ export default function Chat() {
 
       <AnimatePresence>
         {toast && (
-          <motion.div 
-             initial={{ y: 50, opacity: 0 }}
-             animate={{ y: 0, opacity: 1 }}
-             exit={{ y: 50, opacity: 0 }}
-             className={`fixed bottom-40 right-10 z-[100] p-6 rounded-[2rem] border shadow-2xl backdrop-blur-3xl min-w-[300px] ${
-              toast.type === 'success' ? 'bg-teal-950/20 border-teal-500/30 text-teal-300' : 'bg-red-950/20 border-red-500/30 text-red-300'
-            }`}
+          <motion.div
+            initial={{ y: 50, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 50, opacity: 0 }}
+            className={`fixed bottom-40 right-10 z-[100] p-6 rounded-[2rem] border shadow-2xl backdrop-blur-3xl min-w-[300px] ${toast.type === 'success' ? 'bg-teal-950/20 border-teal-500/30 text-teal-300' : 'bg-red-950/20 border-red-500/30 text-red-300'
+              }`}
           >
             <div className="flex items-center gap-4">
               <div className={`w-10 h-10 rounded-2xl flex items-center justify-center ${toast.type === 'success' ? 'bg-teal-500/20' : 'bg-red-500/20'}`}>

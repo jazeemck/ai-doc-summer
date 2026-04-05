@@ -1,5 +1,5 @@
 const DEFAULT_MODEL = 'gemini-2.0-flash';
-const EMBED_MODEL = 'gemini-embedding-001';
+const EMBED_MODEL = 'gemini-embedding-2-preview';
 
 export const aiService = {
   /**
@@ -78,39 +78,94 @@ export const aiService = {
   },
 
   /**
-   * Generates an embedding for a piece of text using native fetch.
+   * Generates an embedding for a piece of text with stable model fallback.
    */
   async generateEmbedding(text: string) {
-    try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) throw new Error('GEMINI_API_KEY_MISSING');
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new Error('GEMINI_API_KEY_MISSING');
 
-      const trimmedText = text.substring(0, 30000);
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${EMBED_MODEL}:embedContent?key=${apiKey}`;
+    // The current state-of-the-art for Gemini is text-embedding-004 (768d)
+    // We will attempt that, then fallback to embedding-001 if needed.
+    const models = ['text-embedding-004', 'embedding-001'];
+    let lastError = null;
+
+    const trimmedText = text.substring(0, 20000); // Guard rails
+
+    for (const modelName of models) {
+      try {
+        console.log(`[AIService] Attempting embedding with model: ${modelName}...`);
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:embedContent?key=${apiKey}`;
+
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: { parts: [{ text: trimmedText }] }
+          })
+        });
+
+        if (!response.ok) {
+          const errData = await response.json().catch(() => ({}));
+          console.warn(`[AIService] Model ${modelName} failed (${response.status}):`, errData.error?.message);
+          lastError = errData.error?.message || response.statusText;
+          continue; // Try next model
+        }
+
+        const data = await response.json();
+        const embedding = data.embedding?.values;
+
+        if (embedding) {
+          console.log(`[AIService] Success! Embedding size: ${embedding.length}`);
+          return embedding;
+        }
+      } catch (error: any) {
+        console.warn(`[AIService] Fatal error on model ${modelName}:`, error.message);
+        lastError = error.message;
+      }
+    }
+
+    throw new Error(`Embedding failed after trying all models. Last error: ${lastError}`);
+  },
+
+  /**
+   * Generates embeddings in batch for high performance (up to 100 chunks at once).
+   */
+  async generateEmbeddingsBatch(chunks: string[]) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new Error('GEMINI_API_KEY_MISSING');
+
+    const modelName = 'text-embedding-004';
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:batchEmbedContents?key=${apiKey}`;
+
+    try {
+      console.log(`[AIService] Batching ${chunks.length} neural links via ${modelName}...`);
+
+      const requests = chunks.map(text => ({
+        model: `models/${modelName}`,
+        content: { parts: [{ text: text.substring(0, 20000) }] }
+      }));
 
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          content: { parts: [{ text: trimmedText }] }
-        })
+        body: JSON.stringify({ requests })
       });
 
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
-        throw { status: response.status, message: errData.error?.message || response.statusText };
+        throw new Error(errData.error?.message || response.statusText);
       }
 
       const data = await response.json();
-      const embedding = data.embedding?.values;
-
-      if (!embedding) {
-        throw new Error('No embedding returned from Gemini API');
-      }
-      return embedding;
+      return data.embeddings?.map((e: any) => e.values) || [];
     } catch (error: any) {
-      console.error("Gemini API Error (Embedding):", error);
-      throw this.handleError(error);
+      console.warn(`[AIService] Batch Embedding unsuccessful:`, error.message);
+      // Fallback: process individually if batch fails
+      const results = [];
+      for (const chunk of chunks) {
+        results.push(await this.generateEmbedding(chunk));
+      }
+      return results;
     }
   },
 

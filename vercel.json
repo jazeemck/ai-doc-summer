@@ -1,25 +1,20 @@
 {
   "version": 2,
-  "builds": [
+  "rewrites": [
     {
-      "src": "client/package.json",
-      "use": "@vercel/static-build",
-      "config": { "distDir": "dist" }
+      "source": "/api/(.*)",
+      "destination": "server/src/index.ts"
     },
     {
-      "src": "server/src/index.ts",
-      "use": "@vercel/node"
+      "source": "/(.*)",
+      "destination": "client/$1"
     }
   ],
-  "routes": [
-    {
-      "src": "/api/(.*)",
-      "dest": "server/src/index.ts"
-    },
-    { "handle": "filesystem" },
-    {
-      "src": "/(.*)",
-      "dest": "client/$1"
+  "functions": {
+    "server/src/index.ts": {
+      "runtime": "@vercel/node",
+      "maxDuration": 60
     }
-  ]
+  },
+  "installCommand": "npm install"
 }

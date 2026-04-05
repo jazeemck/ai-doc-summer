@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "postinstall": "npx prisma generate"
+    "postinstall": "prisma generate --schema=prisma/schema.prisma"
   },
   "keywords": [],
   "author": "",
@@ -28,8 +28,7 @@
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
     "pdf-parse": "^2.4.5",
-    "pg": "^8.20.0",
-    "prisma": "^5.22.0"
+    "pg": "^8.20.0"
   },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",
@@ -44,6 +43,7 @@
     "@types/passport-google-oauth20": "^2.0.17",
     "@types/pdf-parse": "^1.1.5",
     "@vercel/node": "^3.0.0",
+    "prisma": "^5.22.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }
