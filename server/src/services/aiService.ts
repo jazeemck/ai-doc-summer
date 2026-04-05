@@ -1,12 +1,5 @@
-import { GoogleGenAI } from '@google/genai';
-
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-  apiVersion: 'v1beta' // Crucial for systemInstruction and latest models
-});
-
-const DEFAULT_MODEL = 'gemini-1.5-flash-latest';
-const EMBED_MODEL = 'text-embedding-004'; // More standard embedding model
+const DEFAULT_MODEL = 'gemini-2.0-flash';
+const EMBED_MODEL = 'gemini-embedding-001';
 
 export const aiService = {
   /**
@@ -18,53 +11,99 @@ export const aiService = {
     contents: any[];
   }) {
     try {
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) throw new Error('GEMINI_API_KEY_MISSING');
+
       const modelName = params.model || DEFAULT_MODEL;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?key=${apiKey}&alt=sse`;
+
       console.log(`[AIService] Generating stream with model: ${modelName}`);
 
-      const payload: any = {
-        model: modelName,
-        contents: params.contents,
-      };
-
-      if (params.systemInstruction) {
-        payload.config = {
-          systemInstruction: {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: params.contents,
+          systemInstruction: params.systemInstruction ? {
             parts: [{ text: params.systemInstruction }]
-          }
-        };
+          } : undefined
+        })
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw { status: response.status, message: errData.error?.message || response.statusText };
       }
 
-      const aiAny = ai as any;
-      const model = (aiAny.getGenerativeModel) 
-        ? aiAny.getGenerativeModel({ model: modelName })
-        : aiAny.models;
-
-      return await model.generateContentStream(payload);
+      return this.makeAsyncIterator(response.body!);
     } catch (error: any) {
-      console.error("Gemini API Error (Stream):", {
-        status: error.status,
-        message: error.message,
-        details: error
-      });
+      console.error("Gemini API Error (Stream):", error);
       throw this.handleError(error);
     }
   },
 
   /**
-   * Generates an embedding for a piece of text.
+   * Simple async iterator for fetch stream
+   */
+  async *makeAsyncIterator(stream: ReadableStream) {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const jsonStr = line.replace('data: ', '');
+              if (jsonStr.trim() === '[DONE]') continue;
+              const data = JSON.parse(jsonStr);
+              yield data;
+            } catch (e) {
+              // Ignore partial JSON
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  },
+
+  /**
+   * Generates an embedding for a piece of text using native fetch.
    */
   async generateEmbedding(text: string) {
     try {
-      const trimmedText = text.substring(0, 10000); 
-      
-      const result = await ai.models.embedContent({
-        model: EMBED_MODEL,
-        contents: [{ parts: [{ text: trimmedText }] }],
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) throw new Error('GEMINI_API_KEY_MISSING');
+
+      const trimmedText = text.substring(0, 30000);
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${EMBED_MODEL}:embedContent?key=${apiKey}`;
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: { parts: [{ text: trimmedText }] }
+        })
       });
 
-      const resAny = result as any;
-      const embedding = resAny.embedding?.values || resAny.embeddings?.[0]?.values;
-      
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw { status: response.status, message: errData.error?.message || response.statusText };
+      }
+
+      const data = await response.json();
+      const embedding = data.embedding?.values;
+
       if (!embedding) {
         throw new Error('No embedding returned from Gemini API');
       }
@@ -80,24 +119,17 @@ export const aiService = {
    */
   handleError(error: any): Error {
     const status = error.status;
-    const messageStr = error.message || '';
+    const messageStr = error.message || String(error);
     let message = "⚠️ AI temporarily unavailable. Try again.";
 
-    // Logic for Model Failures
-    if (status === 404 || messageStr.toLowerCase().includes('model not found')) {
-      message = "Invalid AI model configuration (Model not found). Check service availability.";
-    } 
-    // Logic for Key Failures
-    else if (messageStr === 'OPENAI_API_KEY_MISSING') {
-      message = "OpenAI API Key is missing. Check system environment variables.";
-    } 
-    // Logic for Rate Limiting
+    if (status === 404 || messageStr.toLowerCase().includes('not found')) {
+      message = "Invalid AI model configuration. Please check if the model is available in your region.";
+    }
     else if (status === 429 || messageStr.includes('429')) {
       message = "Neural grid saturated (Too many requests). Wait a few seconds.";
-    } 
-    // Logic for Invalid Requests
-    else if (status === 400 || messageStr.includes('EMPTY_TRANSCRIPTION')) {
-      message = "Request too large or invalid neural signal.";
+    }
+    else if (status === 400) {
+      message = "Request invalid or text too large for processing.";
     }
 
     const enhancedError = new Error(message);
