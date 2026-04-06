@@ -30,34 +30,33 @@ export async function withCORS(req: VercelRequest, res: VercelResponse, handler:
     }
 
     // 3. NATIVE IDENTITY INJECTION
+    let user = null;
     const authHeader = req.headers.authorization;
+
+    // A. Header-based verification
     if (authHeader?.startsWith('Bearer ')) {
         const token = authHeader.split(' ')[1];
-        const user = auth.verifyToken(token);
-        if (user) {
-            console.log('[Middleware] Identity Confirmed:', user.email);
-            (req as any).user = user;
-        } else {
-            console.warn('[Middleware] Identity Refused: Invalid Neural Token.');
-        }
-    } else if (req.headers.cookie) {
-        // Also support token from cookies (HttpOnly flow)
+        user = auth.verifyToken(token);
+        if (user) console.log('[Middleware] Identity Confirmed via Header:', user.email);
+    }
+
+    // B. Cookie-based verification fallback (Priority if session was forged or header used external provider token)
+    if (!user && req.headers.cookie) {
         const token = req.headers.cookie
             .split(';')
             .find(c => c.trim().startsWith('token='))
             ?.split('=')[1];
 
         if (token) {
-            const user = auth.verifyToken(token);
-            if (user) {
-                console.log('[Middleware] Identity Confirmed (Cookie):', user.email);
-                (req as any).user = user;
-            } else {
-                console.warn('[Middleware] Identity Refused (Cookie): Invalid Neural Token.');
-            }
+            user = auth.verifyToken(token);
+            if (user) console.log('[Middleware] Identity Confirmed via Cookie:', user.email);
         }
+    }
+
+    if (user) {
+        (req as any).user = user;
     } else {
-        console.warn('[Middleware] No Identity Found. Headers:', Object.keys(req.headers));
+        console.warn('[Middleware] Identity Refused. Headers:', Object.keys(req.headers));
     }
 
     return handler(req, res);
