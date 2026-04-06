@@ -115,36 +115,38 @@ export const aiService = {
         console.log(`[AI] Batch Processing ${chunks.length} nodes using ${EMBEDDING_MODEL}`);
 
         try {
-            const url = `https://generativelanguage.googleapis.com/v1beta/${EMBEDDING_MODEL}:batchEmbedContents?key=${apiKey}`;
-            const requests = chunks.map(text => ({
-                model: EMBEDDING_MODEL,
-                content: { parts: [{ text: text.substring(0, 30000) }] }
-            }));
+            const results: number[][] = [];
+            const subBatchSize = 50; // API Payload Limit Safety
 
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ requests })
-            });
+            for (let i = 0; i < chunks.length; i += subBatchSize) {
+                const subBatch = chunks.slice(i, i + subBatchSize);
+                const url = `https://generativelanguage.googleapis.com/v1beta/${EMBEDDING_MODEL}:batchEmbedContents?key=${apiKey}`;
+                const requests = subBatch.map(text => ({
+                    model: EMBEDDING_MODEL,
+                    content: { parts: [{ text: text.substring(0, 30000) }] }
+                }));
 
-            const data = await response.json();
-            if (data.error) throw new Error(data.error.message);
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ requests })
+                });
 
-            const embeddings = data.embeddings?.map((e: any) => e.values) || [];
-            return embeddings;
+                const data = await response.json();
+                if (data.error) throw new Error(data.error.message);
+
+                const embeddings = data.embeddings?.map((e: any) => e.values) || [];
+                results.push(...embeddings);
+            }
+
+            return results;
 
         } catch (err: any) {
             console.warn('[AI] Batch Neural Sync Interrupted. Switching to Sequential Fallback...', err.message);
-            // Fallback: Individual processing to ensure continuity
             const results: number[][] = [];
             for (const chunk of chunks) {
                 const vector = await this.generateEmbedding(chunk);
-                if (vector) results.push(vector);
-                else {
-                    // Return zero vector or placeholder to keep array indices aligned?
-                    // User wants to proceed without failure.
-                    results.push(new Array(768).fill(0));
-                }
+                results.push(vector || new Array(768).fill(0));
             }
             return results;
         }

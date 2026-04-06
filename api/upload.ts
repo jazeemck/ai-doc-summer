@@ -112,25 +112,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                             }
 
                             bgStep = "BATCH_EMBEDDING";
+                            console.log(`[NeuralUpload] Initiating batch embedding for ${chunks.length} nodes...`);
                             const embeddings = await aiService.generateEmbeddingsBatch(chunks);
 
                             if (!embeddings || embeddings.length === 0) {
-                                console.warn("[NeuralUpload] Embedding failure. Proceeding with text-only indexing for continuity.");
+                                console.warn("[NeuralUpload] Embedding failure. Proceeding with text-only indexing.");
                             }
 
                             bgStep = "VECTOR_TRANSACTION";
-                            const insertPromises = chunks.map((chunk, i) => {
-                                const id = randomUUID();
-                                const embedding = embeddings[i] || new Array(768).fill(0);
-                                const vectorStr = `[${embedding.join(',')}]`;
+                            console.log(`[NeuralUpload] Preparing SQL transactions...`);
 
-                                return prisma.$executeRawUnsafe(
-                                    `INSERT INTO "Chunk" (id, content, "documentId", embedding, "userId") VALUES ($1, $2, $3, $4::vector, $5)`,
-                                    id, chunk, document.id, vectorStr, req.user.id
-                                );
-                            });
+                            // Chunk DB insertions into small groups to avoid transaction size limits
+                            const subBatches = [];
+                            const batchSize = 25;
+                            for (let i = 0; i < chunks.length; i += batchSize) {
+                                subBatches.push(chunks.slice(i, i + batchSize));
+                            }
 
-                            await prisma.$transaction(insertPromises);
+                            for (const [batchIdx, subBatch] of subBatches.entries()) {
+                                console.log(`[NeuralUpload] Processing SQL Sub-Batch ${batchIdx + 1}/${subBatches.length}...`);
+                                const insertPromises = subBatch.map((chunk, i) => {
+                                    const globalIdx = (batchIdx * batchSize) + i;
+                                    const id = randomUUID();
+                                    const embedding = embeddings[globalIdx] || new Array(768).fill(0);
+                                    const vectorStr = `[${embedding.join(',')}]`;
+
+                                    return prisma.$executeRawUnsafe(
+                                        `INSERT INTO "Chunk" (id, content, "documentId", embedding, "userId") VALUES ($1, $2, $3, CAST($4 AS vector), $5)`,
+                                        id, chunk, document.id, vectorStr, req.user.id
+                                    );
+                                });
+                                await prisma.$transaction(insertPromises);
+                            }
 
                             await prisma.document.update({ where: { id: document.id }, data: { status: 'COMPLETED' } });
                             console.log(`[NeuralUpload] SUCCESS: ${chunks.length} nodes integrated for document ${document.id}`);
@@ -138,7 +151,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                         } catch (e: any) {
                             console.error(`[NeuralUpload] Ingestion FAIL at ${bgStep}:`, e.message);
                             await prisma.document.update({ where: { id: document.id }, data: { status: 'FAILED' } });
-                            reject(e);
+                            reject(new Error(`Neural Sync Error [${bgStep}]: ${e.message}`));
                         }
                     });
 
