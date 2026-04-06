@@ -63,7 +63,6 @@ export default function Dashboard() {
         // 2. DUAL INGRESS - Backend Neural Sync
         const formData = new FormData();
         formData.append('file', file);
-        formData.append('user_id', user.id);
 
         const uploadPromise = api.post('/upload', formData, {
           headers: { 'Content-Type': 'multipart/form-data' }
