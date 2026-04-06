@@ -1,6 +1,6 @@
 datasource db {
   provider = "postgresql"
-  url      = "postgresql://postgres.fqyafjignysilvovcefv:Jazeem%242447@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres?pgbouncer=true"
+  url      = env("DATABASE_URL")
 }
 
 generator client {
@@ -54,6 +54,7 @@ model Message {
   id            String      @id @default(cuid())
   role          String      // "user" or "assistant"
   content       String
+  sourceType    String?     // "doc" or "general"
   sources       Json?       // Array of { documentName, chunkId }
   sessionId     String
   chatSession   ChatSession @relation(fields: [sessionId], references: [id])
