@@ -1,11 +1,11 @@
 /**
  * Gemini Model Cascade — Document Analysis
- * Tries gemini-2.0-flash → gemini-1.5-flash-001
+ * Tries gemini-2.0-flash → gemini-1.5-flash
  */
 
 const GEMINI_MODELS = [
     'gemini-2.0-flash',
-    'gemini-1.5-flash-001',
+    'gemini-1.5-flash',
 ] as const;
 
 export type GeminiDocumentResult = {
@@ -61,7 +61,7 @@ async function cascade(prompt: string): Promise<string> {
     for (const model of GEMINI_MODELS) {
         try {
             console.log(`[Gemini Cascade] Trying model: ${model}`);
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+            const url = `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${apiKey}`;
 
             const res = await fetch(url, {
                 method: 'POST',
