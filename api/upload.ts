@@ -5,7 +5,9 @@ import { aiService } from './_lib/ai';
 import { supabase } from './_lib/supabase';
 import { randomUUID } from 'crypto';
 import multer from 'multer';
-import PDFParser from 'pdf2json';
+
+// 1. ROBUST PARSER LOADING
+const PDFParser = require("pdf2json");
 
 export const config = {
     api: {
@@ -28,7 +30,7 @@ function runMiddleware(req: any, res: any, fn: any) {
 }
 
 /**
- * PRODUCTION HARDENED: Robust Semantic PDF Ingestion
+ * PRODUCTION HARDENED: Fire-and-Forget Vector Ingestion
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
     return withCORS(req, res, async (req: any, res: VercelResponse) => {
@@ -39,7 +41,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             const file = req.file;
             if (!file) return res.status(400).json({ error: 'No File Received.' });
 
-            // 1. CLOUD PERSISTENCE (Supabase Storage)
+            // A. CLOUD PERSISTENCE (Immediate Storage Upload)
             const fileName = file.originalname || `neural_${Date.now()}.pdf`;
             const filePath = `${req.user.id}/${randomUUID()}_${fileName}`;
 
@@ -53,7 +55,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 .from('documents')
                 .getPublicUrl(filePath);
 
-            // 2. INITIAL DOCUMENT RECORD (User Isolated)
+            // B. NEURAL RECORD INITIALIZATION (User Isolated)
             const document = await prisma.document.create({
                 data: {
                     name: fileName,
@@ -64,19 +66,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 }
             });
 
-            // 3. PARSING & INGESTION PROMISE (Awaiting for Serverless sync)
-            await new Promise((resolve, reject) => {
-                const pdfParser = new (PDFParser as any)(null, 1);
+            // C. FIRE-AND-FORGET INGESTION (Background Execution to prevent Timeouts)
+            const processIngestion = async () => {
+                const pdfParser = new PDFParser(null, 1);
 
-                pdfParser.on("pdfParser_dataError", (errData: any) => {
-                    reject(new Error(errData.parserError));
+                pdfParser.on("pdfParser_dataError", async (errData: any) => {
+                    console.error('[NeuralIngest] Parse Fail:', errData.parserError);
+                    await prisma.document.update({ where: { id: document.id }, data: { status: 'FAILED' } });
                 });
 
                 pdfParser.on("pdfParser_dataReady", async () => {
                     try {
                         const rawText = pdfParser.getRawTextContent().replace(/\r\n/g, " ");
 
-                        // 4. SEMANTIC CHUNKING (400 words, 50-word overlap)
+                        // D. SEMANTIC CHUNKING (400 words, 50-word overlap)
                         const words = rawText.split(/\s+/);
                         const chunks: string[] = [];
                         const chunkSize = 400;
@@ -88,36 +91,44 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                             if (i + chunkSize >= words.length) break;
                         }
 
-                        // 5. GEMINI EMBEDDINGS (768D)
+                        // E. BATCH EMBEDDING & TRANSACTIONAL STORAGE (Performance Fix)
                         if (chunks.length > 0) {
                             const embeddings = await aiService.generateEmbeddingsBatch(chunks);
 
-                            for (let i = 0; i < chunks.length; i++) {
-                                if (embeddings[i]) {
+                            // USING PRISMA TRANSACTION FOR BATCH INSERT PERFORMANCE
+                            await prisma.$transaction(
+                                chunks.map((chunk, i) => {
                                     const vectorStr = `[${embeddings[i].join(',')}]`;
-                                    await prisma.$executeRaw`
+                                    return prisma.$executeRaw`
                                         INSERT INTO "Chunk" (id, content, "documentId", embedding, "userId")
-                                        VALUES (${randomUUID()}, ${chunks[i]}, ${document.id}, ${vectorStr}::vector, ${req.user.id})
+                                        VALUES (${randomUUID()}, ${chunk}, ${document.id}, ${vectorStr}::vector, ${req.user.id})
                                     `;
-                                }
-                            }
+                                })
+                            );
                         }
 
                         await prisma.document.update({ where: { id: document.id }, data: { status: 'COMPLETED' } });
-                        resolve(true);
-                    } catch (e) {
+                    } catch (e: any) {
+                        console.error('[NeuralIngest] Batch Error:', e.message);
                         await prisma.document.update({ where: { id: document.id }, data: { status: 'FAILED' } });
-                        reject(e);
                     }
                 });
 
                 pdfParser.parseBuffer(file.buffer);
+            };
+
+            // Initiate background pulse
+            processIngestion();
+
+            // D. INSTANT NEURAL ACKNOWLEDGMENT
+            res.status(200).json({
+                status: "processing",
+                message: "PDF upload successful, processing started",
+                documentId: document.id
             });
 
-            res.status(200).json({ status: 'success', message: 'PDF ingested successfully' });
-
         } catch (err: any) {
-            console.error('[NeuralIngest] Fail:', err.message);
+            console.error('[NeuralIngest] Request Fail:', err.message);
             res.status(500).json({ error: err.message || 'Internal Neural Failure' });
         }
     });
