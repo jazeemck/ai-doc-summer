@@ -99,7 +99,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
             try {
                 console.log(`[Upload] Starting PDF text extraction...`);
-                const pdfParse = require('pdf-parse');
+                const pdfParseModule = require('pdf-parse');
+                const pdfParse = pdfParseModule.default || pdfParseModule;
+                console.log(`[Upload] pdf-parse loaded. Type: ${typeof pdfParse}`);
                 const pdfData = await pdfParse(file.buffer);
                 rawText = (pdfData.text || '').trim();
                 console.log(`[Upload] ✅ PDF parsed. Pages: ${pdfData.numpages}, Text length: ${rawText.length}`);
