@@ -1,4 +1,4 @@
-const DEFAULT_MODEL = 'gemini-1.5-flash-latest';
+const DEFAULT_MODEL = 'gemini-1.5-flash-001';
 const EMBEDDING_MODEL = 'models/embedding-001';
 
 export const aiService = {
