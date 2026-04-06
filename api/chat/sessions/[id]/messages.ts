@@ -263,18 +263,28 @@ ${fullDocText}`;
                     let contextText = '';
                     let sourceType: 'doc' | 'general' = 'general';
                     let sources: any[] = [];
-                    const RELEVANCE_THRESHOLD = 0.65; // Slightly more relaxed for doc_query intent
+                    const RELEVANCE_THRESHOLD = 0.65;
+
+                    console.log(`[NeuralRAG] USER QUERY: "${content}"`);
 
                     try {
                         const embedding = await aiService.generateEmbedding(content);
                         if (embedding) {
+                            console.log(`[NeuralRAG] Query embedding generated: ${embedding.length} dimensions`);
                             const vectorStr = `[${embedding.join(',')}]`;
                             const chunks: any[] = await prisma.$queryRawUnsafe(
                                 `SELECT content, (embedding <=> CAST($1 AS vector)) as distance FROM "Chunk" WHERE "documentId" = $2 AND "userId" = $3 ORDER BY distance ASC LIMIT 5;`,
                                 vectorStr, documentId, req.user.id
                             );
 
+                            console.log(`[NeuralRAG] RETRIEVED CHUNKS: ${chunks.length}`);
+
                             if (chunks.length > 0) {
+                                // Log each chunk for debugging
+                                chunks.forEach((c, idx) => {
+                                    console.log(`[NeuralRAG] Chunk ${idx + 1} | Distance: ${parseFloat(c.distance).toFixed(4)} | Preview: "${c.content.slice(0, 120)}..."`);
+                                });
+
                                 const bestDistance = parseFloat(chunks[0].distance);
                                 console.log(`[NeuralRAG] Best Similarity: ${bestDistance.toFixed(4)} (Threshold: ${RELEVANCE_THRESHOLD})`);
 
@@ -282,11 +292,15 @@ ${fullDocText}`;
                                     sourceType = 'doc';
                                     sources = [{ documentName: docName, chunkId: 'rag-evidence' }];
                                     contextText = chunks.map(c => c.content).join('\n\n');
-                                    console.log(`[NeuralRAG] ✅ Grounded in ${chunks.length} nodes | Source: PDF`);
+                                    console.log(`[NeuralRAG] ✅ Grounded in ${chunks.length} nodes | Source: PDF | Using PDF Data: YES`);
                                 } else {
-                                    console.log(`[NeuralRAG] ⚠️ Low relevance (${bestDistance.toFixed(4)}). Falling back.`);
+                                    console.log(`[NeuralRAG] ⚠️ Low relevance (${bestDistance.toFixed(4)}). Using PDF Data: NO → Falling back.`);
                                 }
+                            } else {
+                                console.log(`[NeuralRAG] ⚠️ No chunks found in database for this document!`);
                             }
+                        } else {
+                            console.log(`[NeuralRAG] ⚠️ Embedding generation returned null for query.`);
                         }
                     } catch (ragErr: any) {
                         console.error('[NeuralRAG] RAG Phase Error:', ragErr.message);

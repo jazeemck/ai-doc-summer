@@ -6,15 +6,12 @@ import { supabase } from './_lib/supabase';
 import { randomUUID } from 'crypto';
 import multer from 'multer';
 
-const PDFParser = require("pdf2json");
-
 export const config = {
     api: {
         bodyParser: false,
     },
 };
 
-// Switching to any() temporarily to debug hidden fields in the multipart stream
 const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 4.5 * 1024 * 1024 }
@@ -34,23 +31,81 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         let currentStep = "INITIALIZATION";
 
         try {
+            // ── STEP 1: AUTH ────────────────────────────────────
             currentStep = "AUTH_VERIFICATION";
             if (!req.user) return res.status(401).json({ error: 'Auth Link Interrupted.', step: currentStep });
 
+            // ── STEP 2: FILE INGESTION ──────────────────────────
             currentStep = "MULTIPART_INGESTION";
             await runMiddleware(req, res, upload);
 
-            // LOGGING HIDDEN FIELDS FOR NEURAL DEBUGGING
             const files = req.files as any[];
             if (!files || files.length === 0) {
-                console.error(`[NeuralUpload] FAIL at ${currentStep}: No file buffer extracted.`);
                 return res.status(400).json({ error: 'No File Received.', step: currentStep });
             }
 
-            // Pick the first file found (should be 'file')
             const file = files[0];
-            console.log(`[NeuralUpload] STEP 2: INGESTED_OK - Field: ${file.fieldname}, Size: ${file.size} bytes`);
+            console.log(`[Upload] File received: ${file.originalname} | Size: ${file.size} bytes | Type: ${file.mimetype}`);
 
+            // ── STEP 3: PDF TEXT EXTRACTION ─────────────────────
+            currentStep = "TEXT_EXTRACTION";
+            let rawText = '';
+
+            try {
+                const pdfParse = require('pdf-parse');
+                const pdfData = await pdfParse(file.buffer);
+                rawText = (pdfData.text || '').trim();
+            } catch (parseErr: any) {
+                console.error(`[Upload] PDF parse error:`, parseErr.message);
+                return res.status(400).json({
+                    error: `PDF extraction failed: ${parseErr.message}. The file may be corrupted or password-protected.`,
+                    step: currentStep
+                });
+            }
+
+            // ── VALIDATION: Check extracted text quality ────────
+            console.log(`[Upload] EXTRACTED TEXT LENGTH: ${rawText.length}`);
+            console.log(`[Upload] PDF SAMPLE (first 500 chars):\n${rawText.slice(0, 500)}`);
+
+            if (rawText.length < 50) {
+                return res.status(400).json({
+                    error: 'This PDF has no readable text. It may be a scanned document (image-only) which is not supported. Please upload a PDF with selectable text.',
+                    step: currentStep
+                });
+            }
+
+            // ── STEP 4: CHUNKING ────────────────────────────────
+            currentStep = "SEMANTIC_CHUNKING";
+            const chunks: string[] = [];
+            const chunkSize = 400; // words per chunk
+            const overlap = 50;    // overlap for context continuity
+            const words = rawText.split(/\s+/).filter(w => w.length > 0);
+
+            console.log(`[Upload] Total words extracted: ${words.length}`);
+
+            for (let i = 0; i < words.length; i += (chunkSize - overlap)) {
+                const chunk = words.slice(i, i + chunkSize).join(' ').trim();
+                if (chunk.length > 50) { // Reject tiny/empty chunks
+                    chunks.push(chunk);
+                }
+                if (i + chunkSize >= words.length) break;
+            }
+
+            console.log(`[Upload] TOTAL CHUNKS: ${chunks.length}`);
+
+            if (chunks.length === 0) {
+                return res.status(400).json({
+                    error: 'PDF text was extracted but no meaningful chunks could be created. The document may contain only headers or very short text.',
+                    step: currentStep
+                });
+            }
+
+            // Log quality of first few chunks
+            chunks.slice(0, 3).forEach((c, i) => {
+                console.log(`[Upload] Chunk ${i + 1} (${c.length} chars): ${c.slice(0, 120)}...`);
+            });
+
+            // ── STEP 5: SUPABASE STORAGE ────────────────────────
             currentStep = "SUPABASE_UPLOAD";
             const fileName = file.originalname || `neural_${Date.now()}.pdf`;
             const filePath = `${req.user.id}/${randomUUID()}_${fileName}`;
@@ -65,7 +120,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 .from('documents')
                 .getPublicUrl(filePath);
 
-            currentStep = "DATABASE_RECORD_INIT";
+            // ── STEP 6: DATABASE RECORD ─────────────────────────
+            currentStep = "DATABASE_RECORD";
             const document = await prisma.document.create({
                 data: {
                     name: fileName,
@@ -76,96 +132,81 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 }
             });
 
-            // 3. SYNCHRONIZED NEURAL INGESTION (Requirement for Serverless Lifecycle)
-            await new Promise((resolve, reject) => {
-                let bgStep = "BACKGROUND_INITIALIZATION";
-                try {
-                    const pdfParser = new PDFParser(null, 1);
+            console.log(`[Upload] Document record created: ${document.id}`);
 
-                    pdfParser.on("pdfParser_dataError", async (errData: any) => {
-                        console.error(`[NeuralUpload] PDF Parse Error: ${errData.parserError}`);
-                        await prisma.document.update({ where: { id: document.id }, data: { status: 'FAILED' } });
-                        reject(new Error(errData.parserError));
-                    });
+            // ── STEP 7: EMBEDDINGS ──────────────────────────────
+            currentStep = "BATCH_EMBEDDING";
+            console.log(`[Upload] Generating embeddings for ${chunks.length} chunks...`);
 
-                    pdfParser.on("pdfParser_dataReady", async () => {
-                        try {
-                            bgStep = "TEXT_EXTRACTION";
-                            const rawText = (pdfParser.getRawTextContent() || "").replace(/\r\n/g, " ");
+            let embeddings: number[][] = [];
+            try {
+                embeddings = await aiService.generateEmbeddingsBatch(chunks);
+                console.log(`[Upload] Embeddings generated: ${embeddings.length} vectors`);
 
-                            bgStep = "SEMANTIC_CHUNKING";
-                            const words = rawText.split(/\s+/);
-                            const chunks: string[] = [];
-                            const chunkSize = 500;
-                            const overlap = 50;
+                if (embeddings.length > 0) {
+                    console.log(`[Upload] Embedding dimension: ${embeddings[0].length}`);
+                }
+            } catch (embErr: any) {
+                console.error(`[Upload] Embedding generation failed:`, embErr.message);
+                console.warn(`[Upload] Proceeding with zero-vector fallback for text-only indexing.`);
+            }
 
-                            for (let i = 0; i < words.length; i += (chunkSize - overlap)) {
-                                const chunk = words.slice(i, i + chunkSize).join(' ');
-                                if (chunk.trim().length > 10) chunks.push(chunk);
-                                if (i + chunkSize >= words.length) break;
-                            }
+            // ── STEP 8: VECTOR DB INSERTION ─────────────────────
+            currentStep = "VECTOR_TRANSACTION";
+            console.log(`[Upload] Inserting ${chunks.length} chunks into vector database...`);
 
-                            if (chunks.length === 0) {
-                                await prisma.document.update({ where: { id: document.id }, data: { status: 'FAILED' } });
-                                resolve(null);
-                                return;
-                            }
+            const subBatches: string[][] = [];
+            const batchSize = 20;
+            for (let i = 0; i < chunks.length; i += batchSize) {
+                subBatches.push(chunks.slice(i, i + batchSize));
+            }
 
-                            bgStep = "BATCH_EMBEDDING";
-                            console.log(`[NeuralUpload] Initiating batch embedding for ${chunks.length} nodes...`);
-                            const embeddings = await aiService.generateEmbeddingsBatch(chunks);
+            for (const [batchIdx, subBatch] of subBatches.entries()) {
+                console.log(`[Upload] SQL Batch ${batchIdx + 1}/${subBatches.length} (${subBatch.length} chunks)`);
 
-                            if (!embeddings || embeddings.length === 0) {
-                                console.warn("[NeuralUpload] Embedding failure. Proceeding with text-only indexing.");
-                            }
+                const insertPromises = subBatch.map((chunk, i) => {
+                    const globalIdx = (batchIdx * batchSize) + i;
+                    const id = randomUUID();
+                    const embedding = embeddings[globalIdx] || new Array(768).fill(0);
+                    const vectorStr = `[${embedding.join(',')}]`;
 
-                            bgStep = "VECTOR_TRANSACTION";
-                            console.log(`[NeuralUpload] Preparing SQL transactions...`);
+                    // Validate before insert
+                    if (!chunk || chunk.trim().length === 0) {
+                        console.warn(`[Upload] Skipping empty chunk at index ${globalIdx}`);
+                        return prisma.$executeRawUnsafe('SELECT 1');
+                    }
 
-                            // Chunk DB insertions into small groups to avoid transaction size limits
-                            const subBatches = [];
-                            const batchSize = 25;
-                            for (let i = 0; i < chunks.length; i += batchSize) {
-                                subBatches.push(chunks.slice(i, i + batchSize));
-                            }
+                    return prisma.$executeRawUnsafe(
+                        `INSERT INTO "Chunk" (id, content, "documentId", embedding, "userId") VALUES ($1, $2, $3, CAST($4 AS vector), $5)`,
+                        id, chunk, document.id, vectorStr, req.user.id
+                    );
+                });
 
-                            for (const [batchIdx, subBatch] of subBatches.entries()) {
-                                console.log(`[NeuralUpload] Processing SQL Sub-Batch ${batchIdx + 1}/${subBatches.length}...`);
-                                const insertPromises = subBatch.map((chunk, i) => {
-                                    const globalIdx = (batchIdx * batchSize) + i;
-                                    const id = randomUUID();
-                                    const embedding = embeddings[globalIdx] || new Array(768).fill(0);
-                                    const vectorStr = `[${embedding.join(',')}]`;
+                await prisma.$transaction(insertPromises);
+            }
 
-                                    return prisma.$executeRawUnsafe(
-                                        `INSERT INTO "Chunk" (id, content, "documentId", embedding, "userId") VALUES ($1, $2, $3, CAST($4 AS vector), $5)`,
-                                        id, chunk, document.id, vectorStr, req.user.id
-                                    );
-                                });
-                                await prisma.$transaction(insertPromises);
-                            }
+            // ── STEP 9: FINALIZE ────────────────────────────────
+            await prisma.document.update({
+                where: { id: document.id },
+                data: { status: 'COMPLETED' }
+            });
 
-                            await prisma.document.update({ where: { id: document.id }, data: { status: 'COMPLETED' } });
-                            console.log(`[NeuralUpload] SUCCESS: ${chunks.length} nodes integrated for document ${document.id}`);
-                            resolve(null);
-                        } catch (e: any) {
-                            console.error(`[NeuralUpload] Ingestion FAIL at ${bgStep}:`, e.message);
-                            await prisma.document.update({ where: { id: document.id }, data: { status: 'FAILED' } });
-                            reject(new Error(`Neural Sync Error [${bgStep}]: ${e.message}`));
-                        }
-                    });
+            console.log(`[Upload] ✅ SUCCESS: ${chunks.length} chunks stored for document ${document.id}`);
+            console.log(`[Upload] ✅ Embeddings: ${embeddings.length > 0 ? 'YES' : 'ZERO-VECTOR FALLBACK'}`);
 
-                    pdfParser.parseBuffer(file.buffer);
-                } catch (err: any) {
-                    console.error("[NeuralUpload] Synchronous Failure:", err);
-                    reject(err);
+            res.status(200).json({
+                status: "completed",
+                documentId: document.id,
+                debug: {
+                    textLength: rawText.length,
+                    totalChunks: chunks.length,
+                    embeddingsGenerated: embeddings.length,
+                    embeddingDimension: embeddings[0]?.length || 0
                 }
             });
 
-            res.status(200).json({ status: "completed", documentId: document.id });
-
         } catch (err: any) {
-            console.error(`[NeuralUpload] CRITICAL_FAIL at ${currentStep}:`, err.message);
+            console.error(`[Upload] ❌ CRITICAL FAIL at ${currentStep}:`, err.message);
             res.status(500).json({ error: err.message, step: currentStep });
         }
     });
