@@ -81,47 +81,64 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 try {
                     bgStep = "PDF_PARSING";
                     const pdfParser = new PDFParser(null, 1);
+
                     pdfParser.on("pdfParser_dataError", async (errData: any) => {
+                        console.error(`[NeuralUpload] PDF Parse Error: ${errData.parserError}`);
                         await prisma.document.update({ where: { id: document.id }, data: { status: 'FAILED' } });
                     });
 
                     pdfParser.on("pdfParser_dataReady", async () => {
                         try {
                             bgStep = "TEXT_EXTRACTION";
-                            const rawText = pdfParser.getRawTextContent().replace(/\r\n/g, " ");
+                            const rawText = (pdfParser.getRawTextContent() || "").replace(/\r\n/g, " ");
 
                             bgStep = "SEMANTIC_CHUNKING";
                             const words = rawText.split(/\s+/);
                             const chunks: string[] = [];
-                            const chunkSize = 400;
+                            const chunkSize = 500;
                             const overlap = 50;
+
                             for (let i = 0; i < words.length; i += (chunkSize - overlap)) {
                                 const chunk = words.slice(i, i + chunkSize).join(' ');
                                 if (chunk.trim().length > 10) chunks.push(chunk);
                                 if (i + chunkSize >= words.length) break;
                             }
 
-                            bgStep = "BATCH_EMBEDDING";
-                            if (chunks.length > 0) {
-                                const embeddings = await aiService.generateEmbeddingsBatch(chunks);
-                                bgStep = "VECTOR_TRANSACTION";
-                                await prisma.$transaction(
-                                    chunks.map((chunk, i) => {
-                                        const vectorStr = `[${embeddings[i].join(',')}]`;
-                                        return prisma.$executeRaw`
-                                            INSERT INTO "Chunk" (id, content, "documentId", embedding, "userId")
-                                            VALUES (${randomUUID()}, ${chunk}, ${document.id}, ${vectorStr}::vector, ${req.user.id})
-                                        `;
-                                    })
-                                );
+                            if (chunks.length === 0) {
+                                await prisma.document.update({ where: { id: document.id }, data: { status: 'FAILED' } });
+                                return;
                             }
+
+                            bgStep = "BATCH_EMBEDDING";
+                            const embeddings = await aiService.generateEmbeddingsBatch(chunks);
+
+                            if (!embeddings || embeddings.length === 0) {
+                                throw new Error("Zero embeddings returned from Neural Intelligence Engine.");
+                            }
+
+                            bgStep = "VECTOR_TRANSACTION";
+                            await prisma.$transaction(
+                                chunks.map((chunk, i) => {
+                                    if (!embeddings[i]) return prisma.$executeRaw`SELECT 1`; // Skip if no embedding for this chunk
+                                    const vectorStr = `[${embeddings[i].join(',')}]`;
+                                    return prisma.$executeRawUnsafe(`
+                                        INSERT INTO "Chunk" (id, content, "documentId", embedding, "userId")
+                                        VALUES ('${randomUUID()}', ${JSON.stringify(chunk)}, '${document.id}', '${vectorStr}'::vector, '${req.user.id}')
+                                    `);
+                                })
+                            );
+
                             await prisma.document.update({ where: { id: document.id }, data: { status: 'COMPLETED' } });
+                            console.log(`[NeuralUpload] SUCCESS: ${chunks.length} nodes integrated for document ${document.id}`);
+
                         } catch (e: any) {
+                            console.error(`[NeuralUpload] Ingestion FAIL at ${bgStep}:`, e.message);
                             await prisma.document.update({ where: { id: document.id }, data: { status: 'FAILED' } });
                         }
                     });
                     pdfParser.parseBuffer(file.buffer);
                 } catch (err: any) {
+                    console.error(`[NeuralUpload] Critical Error at ${bgStep}:`, err.message);
                     await prisma.document.update({ where: { id: document.id }, data: { status: 'FAILED' } });
                 }
             };

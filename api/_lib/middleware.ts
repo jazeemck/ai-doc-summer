@@ -8,7 +8,9 @@ export async function withCORS(req: VercelRequest, res: VercelResponse, handler:
     // 1. DYNAMIC ORIGIN GUARDIAN
     const allowedOrigins = [
         'https://ai-doc-summer.vercel.app',
-        /https:\/\/ai-doc-summer-.*\.vercel\.app/
+        /https:\/\/ai-doc-summer-.*\.vercel\.app/,
+        'http://localhost:5173',
+        'http://localhost:3000'
     ];
 
     const origin = req.headers.origin || '';

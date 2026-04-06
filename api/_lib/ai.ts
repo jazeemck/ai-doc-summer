@@ -1,4 +1,5 @@
-const DEFAULT_MODEL = 'gemini-2.0-flash';
+const DEFAULT_MODEL = 'gemini-1.5-flash-latest';
+const EMBEDDING_MODEL = 'text-embedding-004';
 
 export const aiService = {
     /**
@@ -65,29 +66,29 @@ export const aiService = {
 
     async generateEmbedding(text: string) {
         const apiKey = process.env.GEMINI_API_KEY;
-        const modelName = 'embedding-001';
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:embedContent?key=${apiKey}`;
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${EMBEDDING_MODEL}:embedContent?key=${apiKey}`;
 
         const response = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                content: { parts: [{ text: text.substring(0, 20000) }] }
+                content: { parts: [{ text: text.substring(0, 30000) }] }
             })
         });
 
         const data = await response.json();
+        if (data.error) throw new Error(data.error.message);
         return data.embedding?.values;
     },
 
     async generateEmbeddingsBatch(chunks: string[]) {
+        if (chunks.length === 0) return [];
         const apiKey = process.env.GEMINI_API_KEY;
-        const modelName = 'embedding-001';
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:batchEmbedContents?key=${apiKey}`;
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${EMBEDDING_MODEL}:batchEmbedContents?key=${apiKey}`;
 
         const requests = chunks.map(text => ({
-            model: `models/${modelName}`,
-            content: { parts: [{ text: text.substring(0, 20000) }] }
+            model: `models/${EMBEDDING_MODEL}`,
+            content: { parts: [{ text: text.substring(0, 30000) }] }
         }));
 
         const response = await fetch(url, {
@@ -97,6 +98,12 @@ export const aiService = {
         });
 
         const data = await response.json();
-        return data.embeddings?.map((e: any) => e.values) || [];
+        if (data.error) throw new Error(data.error.message);
+
+        const embeddings = data.embeddings?.map((e: any) => e.values) || [];
+        if (embeddings.length !== chunks.length) {
+            console.warn(`[AI] Embedding count mismatch: ${embeddings.length} vs ${chunks.length}`);
+        }
+        return embeddings;
     }
 };

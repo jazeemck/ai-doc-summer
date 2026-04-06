@@ -11,18 +11,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const { content, documentId } = req.body;
 
         try {
-            // 1. Context Retrieval
+            // 1. Context Retrieval (Neural Similarity Search)
             let context = '';
-            if (documentId) {
-                const chunks: any[] = await prisma.$queryRaw`
-          SELECT content FROM "Chunk" WHERE "documentId" = ${documentId} LIMIT 2
-        `;
+            if (documentId && content) {
+                const queryVector = await aiService.generateEmbedding(content);
+                const vectorStr = `[${queryVector.join(',')}]`;
+
+                const chunks: any[] = await prisma.$queryRawUnsafe(`
+                    SELECT content, 1 - (embedding <=> '${vectorStr}'::vector) as similarity
+                    FROM "Chunk" 
+                    WHERE "documentId" = '${documentId}'
+                    ORDER BY similarity DESC
+                    LIMIT 4
+                `);
+
                 context = chunks.map(c => c.content).join('\n\n');
+                console.log(`[NeuralChat] Context extracted from ${chunks.length} nodes. Max Similarity: ${chunks[0]?.similarity}`);
             }
 
-            // 2. Generation (Non-streaming for simplicity in this endpoint)
+            // 2. Generation 
             const stream = await aiService.generateContentStream({
-                systemInstruction: context ? `Use context: ${context}` : undefined,
+                systemInstruction: context
+                    ? `You are Cortex (v2), a high-fidelity neuro-logical assistant. 
+                       Use the provided memory fragments to answer. If irrelevant, rely on base model intelligence.
+                       CONTEXT MEMORY:
+                       ${context}`
+                    : "You are Cortex, a neural assistant. Help the user with their queries.",
                 contents: [{ role: 'user', parts: [{ text: content }] }]
             });
 
