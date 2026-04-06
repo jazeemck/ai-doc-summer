@@ -1,14 +1,10 @@
 datasource db {
-  provider   = "postgresql" 
-  url        = env("DATABASE_URL")
-  directUrl  = env("DIRECT_URL")
-  extensions = [pgvector]
+  provider = "postgresql"
+  url      = "postgresql://postgres.fqyafjignysilvovcefv:Jazeem%2447@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres"
 }
 
 generator client {
-  provider        = "prisma-client-js"
-  previewFeatures = ["postgresqlExtensions"]
-  binaryTargets   = ["native", "rhel-openssl-3.0.x"]
+  provider = "prisma-client-js"
 }
 
 model User {
@@ -39,8 +35,6 @@ model Document {
 model Chunk {
   id         String   @id @default(cuid())
   content    String
-  // Stored as pgvector(768)
-  embedding  Unsupported("vector")?
   documentId String
   document   Document @relation(fields: [documentId], references: [id])
   userId     String
@@ -64,4 +58,3 @@ model Message {
   chatSession   ChatSession @relation(fields: [sessionId], references: [id])
   createdAt     DateTime    @default(now())
 }
-
