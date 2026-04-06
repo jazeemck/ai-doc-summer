@@ -408,7 +408,7 @@ ${content}`
             } catch (err: any) {
                 console.error('[NeuralMessage] CRITICAL:', err.message);
                 if (!res.headersSent) res.status(500).json({ error: `Neural link failed: ${err.message}` });
-                else res.write(`data: ${JSON.stringify({ type: 'error', message: err.message })}\n\n`);
+                else res.write(`data: ${JSON.stringify({ type: 'error', text: err.message || 'System error' })}\n\n`);
                 res.end();
             }
         }

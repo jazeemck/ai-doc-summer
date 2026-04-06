@@ -11,36 +11,55 @@ export const aiService = {
         contents: any[];
     }) {
         const apiKey = process.env.GEMINI_API_KEY;
-        const modelName = params.model || DEFAULT_MODEL;
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?key=${apiKey}&alt=sse`;
+        const requestedModel = params.model || DEFAULT_MODEL;
 
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                contents: params.contents,
-                systemInstruction: params.systemInstruction ? {
-                    parts: [{ text: params.systemInstruction }]
-                } : undefined,
-                safetySettings: [
-                    { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-                    { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-                    { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-                    { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
-                ],
-                generationConfig: {
-                    temperature: 0.2,
-                    maxOutputTokens: 2048,
+        const attemptGeneration = async (model: string) => {
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?key=${apiKey}&alt=sse`;
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: params.contents,
+                    systemInstruction: params.systemInstruction ? {
+                        parts: [{ text: params.systemInstruction }]
+                    } : undefined,
+                    safetySettings: [
+                        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+                        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+                        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+                        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+                    ],
+                    generationConfig: {
+                        temperature: 0.2,
+                        maxOutputTokens: 2048,
+                    }
+                })
+            });
+
+            if (!response.ok) {
+                const errData = await response.json().catch(() => ({}));
+                throw new Error(errData.error?.message || response.statusText || `HTTP ${response.status}`);
+            }
+
+            return response.body!;
+        };
+
+        try {
+            console.log(`[NeuralAI] Primary Link: ${requestedModel}`);
+            const body = await attemptGeneration(requestedModel);
+            return this.makeAsyncIterator(body);
+        } catch (err: any) {
+            if (requestedModel !== 'gemini-1.5-flash-001') {
+                console.warn(`[NeuralAI] Primary Link Failed (${err.message}). Falling back to baseline...`);
+                try {
+                    const body = await attemptGeneration('gemini-1.5-flash-001');
+                    return this.makeAsyncIterator(body);
+                } catch (fallbackErr: any) {
+                    throw new Error(`Neural Link Offline: ${fallbackErr.message}`);
                 }
-            })
-        });
-
-        if (!response.ok) {
-            const errData = await response.json().catch(() => ({}));
-            throw { status: response.status, message: errData.error?.message || response.statusText };
+            }
+            throw new Error(`Neural Link Offline: ${err.message}`);
         }
-
-        return this.makeAsyncIterator(response.body!);
     },
 
     async *makeAsyncIterator(stream: ReadableStream) {
