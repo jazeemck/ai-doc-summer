@@ -76,15 +76,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 }
             });
 
-            const processIngestion = async () => {
+            // 3. SYNCHRONIZED NEURAL INGESTION (Requirement for Serverless Lifecycle)
+            await new Promise((resolve, reject) => {
                 let bgStep = "BACKGROUND_INITIALIZATION";
                 try {
-                    bgStep = "PDF_PARSING";
                     const pdfParser = new PDFParser(null, 1);
 
                     pdfParser.on("pdfParser_dataError", async (errData: any) => {
                         console.error(`[NeuralUpload] PDF Parse Error: ${errData.parserError}`);
                         await prisma.document.update({ where: { id: document.id }, data: { status: 'FAILED' } });
+                        reject(new Error(errData.parserError));
                     });
 
                     pdfParser.on("pdfParser_dataReady", async () => {
@@ -106,6 +107,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
                             if (chunks.length === 0) {
                                 await prisma.document.update({ where: { id: document.id }, data: { status: 'FAILED' } });
+                                resolve(null);
                                 return;
                             }
 
@@ -119,7 +121,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                             bgStep = "VECTOR_TRANSACTION";
                             await prisma.$transaction(
                                 chunks.map((chunk, i) => {
-                                    if (!embeddings[i]) return prisma.$executeRaw`SELECT 1`; // Skip if no embedding for this chunk
+                                    if (!embeddings[i]) return prisma.$executeRaw`SELECT 1`; // Skip if no embedding for this row
                                     const vectorStr = `[${embeddings[i].join(',')}]`;
                                     return prisma.$executeRawUnsafe(`
                                         INSERT INTO "Chunk" (id, content, "documentId", embedding, "userId")
@@ -130,21 +132,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
                             await prisma.document.update({ where: { id: document.id }, data: { status: 'COMPLETED' } });
                             console.log(`[NeuralUpload] SUCCESS: ${chunks.length} nodes integrated for document ${document.id}`);
-
+                            resolve(null);
                         } catch (e: any) {
                             console.error(`[NeuralUpload] Ingestion FAIL at ${bgStep}:`, e.message);
                             await prisma.document.update({ where: { id: document.id }, data: { status: 'FAILED' } });
+                            reject(e);
                         }
                     });
+
                     pdfParser.parseBuffer(file.buffer);
                 } catch (err: any) {
-                    console.error(`[NeuralUpload] Critical Error at ${bgStep}:`, err.message);
-                    await prisma.document.update({ where: { id: document.id }, data: { status: 'FAILED' } });
+                    console.error("[NeuralUpload] Synchronous Failure:", err);
+                    reject(err);
                 }
-            };
+            });
 
-            processIngestion();
-            res.status(200).json({ status: "processing", documentId: document.id });
+            res.status(200).json({ status: "completed", documentId: document.id });
 
         } catch (err: any) {
             console.error(`[NeuralUpload] CRITICAL_FAIL at ${currentStep}:`, err.message);
