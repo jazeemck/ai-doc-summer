@@ -309,20 +309,19 @@ export default function Chat() {
       }
 
       const result = await response.json();
-      const doc = result.documents?.[0];
 
-      if (doc && (doc.status === 'COMPLETED' || doc.status === 'PROCESSING')) {
-        // Even if still processing, we add it to the library for live status updates
+      if (result.status === 'completed' || result.status === 'processing') {
+        // Refresh library to see the new document
         await loadLibraryDocuments();
 
-        if (doc.status === 'COMPLETED') {
-          setDocumentId(doc.id);
+        if (result.status === 'completed') {
+          setDocumentId(result.documentId);
           showToast(`Success! ${file.name} is now online.`, 'success');
         } else {
           showToast(`${file.name} is synchronizing...`, 'success');
         }
       } else {
-        throw new Error(doc?.message || 'Neural ingestion failed');
+        throw new Error(result.message || 'Neural ingestion failed');
       }
     } catch (err: any) {
       setUploadedFile(null);
@@ -570,7 +569,14 @@ export default function Chat() {
               <div className="hidden md:flex items-center gap-3 px-4 py-2 bg-teal-500/10 border border-teal-500/20 rounded-full">
                 <FileText size={14} className="text-teal-400" />
                 <span className="text-[11px] font-black text-teal-300 uppercase tracking-tighter truncate max-w-[150px]">{uploadedFile.name}</span>
-                <button onClick={() => { setUploadedFile(null); setDocumentId(null); }} className="hover:text-white text-teal-500 transition-colors">
+                <button
+                  onClick={() => handleSend(undefined, "Please provide a comprehensive executive summary of this document.")}
+                  className="ml-2 px-3 py-1 rounded-lg bg-teal-500/20 hover:bg-teal-500/40 text-[9px] font-black uppercase text-teal-300 border border-teal-500/30 transition-all flex items-center gap-1.5"
+                >
+                  <Sparkles size={10} />
+                  Summarize
+                </button>
+                <button onClick={() => { setUploadedFile(null); setDocumentId(null); }} className="hover:text-white text-teal-500 transition-colors ml-1">
                   <X size={14} />
                 </button>
               </div>
