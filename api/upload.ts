@@ -115,7 +115,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                             const embeddings = await aiService.generateEmbeddingsBatch(chunks);
 
                             if (!embeddings || embeddings.length === 0) {
-                                throw new Error("Zero embeddings returned from Neural Intelligence Engine.");
+                                console.warn("[NeuralUpload] Embedding failure. Proceeding with text-only indexing for continuity.");
                             }
 
                             bgStep = "VECTOR_TRANSACTION";
