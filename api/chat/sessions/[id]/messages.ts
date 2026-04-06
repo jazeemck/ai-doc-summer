@@ -34,13 +34,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 // 2. Intelligence Preparation (Context & Embeddings)
                 let contextText = '';
                 if (documentId) {
-                    const embedding = await aiService.generateEmbedding(content);
-                    if (embedding) {
-                        const vectorStr = `[${embedding.join(',')}]`;
-                        const chunks: any[] = await prisma.$queryRawUnsafe(`
-              SELECT content, (embedding <=> $1::vector) as distance FROM "Chunk" d WHERE "documentId" = $2 AND "userId" = $3 ORDER BY distance ASC LIMIT 3;
-            `, vectorStr, documentId, req.user.id);
-                        contextText = chunks.map(c => c.content).join('\n\n');
+                    try {
+                        const embedding = await aiService.generateEmbedding(content);
+                        if (embedding) {
+                            const vectorStr = `[${embedding.join(',')}]`;
+                            const limit = content.toLowerCase().includes('summary') ? 10 : 3;
+
+                            const chunks: any[] = await prisma.$queryRawUnsafe(
+                                `SELECT content, (embedding <=> CAST($1 AS vector)) as distance FROM "Chunk" WHERE "documentId" = $2 AND "userId" = $3 ORDER BY distance ASC LIMIT $4;`,
+                                vectorStr, documentId, req.user.id, limit
+                            );
+                            contextText = chunks.map(c => c.content).join('\n\n');
+                        }
+                    } catch (contextErr: any) {
+                        console.error('[NeuralMessage] Context retrieval failed:', contextErr.message);
+                        // We don't throw here to allow general chat fallback
                     }
                 }
 
@@ -69,7 +77,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
                 res.end();
             } catch (err: any) {
-                if (!res.headersSent) res.status(500).json({ error: 'Neural stream failure.' });
+                console.error('[NeuralMessage] FATAL:', err.message);
+                if (!res.headersSent) res.status(500).json({ error: `Neural link failed: ${err.message}` });
                 else res.write(`data: ${JSON.stringify({ type: 'error', message: err.message })}\n\n`);
                 res.end();
             }
