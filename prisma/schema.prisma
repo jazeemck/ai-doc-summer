@@ -1,6 +1,7 @@
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 generator client {
@@ -21,15 +22,20 @@ model User {
 }
 
 model Document {
-  id        String   @id @default(cuid())
-  name      String
-  url       String?
-  size      Int
-  status    String   @default("PROCESSING")
-  userId    String
-  user      User     @relation(fields: [userId], references: [id])
-  chunks    Chunk[]
-  createdAt DateTime @default(now())
+  id            String   @id @default(cuid())
+  name          String
+  url           String?
+  size          Int
+  status        String   @default("PROCESSING")
+  mimeType      String?  @default("application/pdf")
+  extractedText String?  @db.Text
+  metadata      Json?
+  storagePath   String?  @default("")
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  chunks        Chunk[]
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime? @updatedAt
 }
 
 model Chunk {
