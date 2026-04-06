@@ -11,6 +11,7 @@ import {
 import api from '../lib/api';
 import toast from 'react-hot-toast';
 import { useTheme } from '../context/ThemeContext';
+import { supabase } from '../lib/supabaseClient';
 
 interface DocumentRecord {
   id: string;
@@ -129,8 +130,8 @@ export default function Dashboard() {
           <button
             onClick={() => navigate('/dashboard')}
             className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all text-xs group ${window.location.pathname === '/dashboard'
-                ? 'bg-teal-500/10 text-teal-300 border border-teal-500/10 shadow-sm'
-                : 'text-slate-500 hover:bg-white/5 hover:text-white border border-transparent'
+              ? 'bg-teal-500/10 text-teal-300 border border-teal-500/10 shadow-sm'
+              : 'text-slate-500 hover:bg-white/5 hover:text-white border border-transparent'
               }`}
           >
             <Database size={16} className={window.location.pathname === '/dashboard' ? 'text-teal-400' : 'text-slate-600'} />
@@ -140,8 +141,8 @@ export default function Dashboard() {
           <button
             onClick={() => navigate('/chat')}
             className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all text-xs group ${window.location.pathname === '/chat'
-                ? 'bg-teal-500/10 text-teal-300 border border-teal-500/10 shadow-sm'
-                : 'text-slate-500 hover:bg-white/5 hover:text-white border border-transparent'
+              ? 'bg-teal-500/10 text-teal-300 border border-teal-500/10 shadow-sm'
+              : 'text-slate-500 hover:bg-white/5 hover:text-white border border-transparent'
               }`}
           >
             <MessageSquare size={16} className={window.location.pathname === '/chat' ? 'text-slate-600 group-hover:text-slate-400' : 'text-slate-600'} />
