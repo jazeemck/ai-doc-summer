@@ -1,4 +1,4 @@
-const DEFAULT_MODEL = 'gemini-2.0-flash';
+const DEFAULT_MODEL = 'gemini-1.5-flash';
 const EMBEDDING_MODEL = 'models/embedding-001';
 
 export const aiService = {
@@ -14,7 +14,7 @@ export const aiService = {
         const requestedModel = params.model || DEFAULT_MODEL;
 
         const attemptGeneration = async (model: string) => {
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?key=${apiKey}&alt=sse`;
+            const url = `https://generativelanguage.googleapis.com/v1/models/${model}:streamGenerateContent?key=${apiKey}&alt=sse`;
             const response = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -49,10 +49,11 @@ export const aiService = {
             const body = await attemptGeneration(requestedModel);
             return this.makeAsyncIterator(body);
         } catch (err: any) {
-            if (requestedModel !== 'gemini-1.5-flash-001') {
+            const fallbackModel = 'gemini-1.5-flash';
+            if (requestedModel !== fallbackModel) {
                 console.warn(`[NeuralAI] Primary Link Failed (${err.message}). Falling back to baseline...`);
                 try {
-                    const body = await attemptGeneration('gemini-1.5-flash-001');
+                    const body = await attemptGeneration(fallbackModel);
                     return this.makeAsyncIterator(body);
                 } catch (fallbackErr: any) {
                     throw new Error(`Neural Link Offline: ${fallbackErr.message}`);
