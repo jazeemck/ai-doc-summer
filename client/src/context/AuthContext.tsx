@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
 import api from '../lib/api';
+import { supabase } from '../lib/supabaseClient';
 
 interface User {
   id: string;
@@ -14,6 +15,7 @@ interface AuthContextType {
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string, name: string) => Promise<void>;
+  loginWithGoogle: () => Promise<void>;
   logout: () => void;
 }
 
@@ -40,7 +42,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       setLoading(false);
     };
+
+    // 2. SOCIAL AUTH LISTENER
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event: any, session: any) => {
+      if (event === 'SIGNED_IN' && session?.user) {
+        try {
+          // Sync social user with local backend
+          const { data } = await api.post('/auth/google-sync', {
+            email: session.user.email,
+            name: session.user.user_metadata?.full_name || session.user.email?.split('@')[0],
+            supabaseId: session.user.id
+          });
+
+          localStorage.setItem('token', data.token);
+          setToken(data.token);
+          setUser(data.user);
+
+          // Clear Supabase session to keep local JWT as source of truth
+          await supabase.auth.signOut();
+        } catch (err) {
+          console.error('[AuthContext] Social Sync Fail:', err);
+        }
+      }
+    });
+
     fetchMe();
+    return () => subscription.unsubscribe();
   }, []);
 
   const login = async (email: string, password: string) => {
@@ -57,6 +84,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(data.user);
   };
 
+  const loginWithGoogle = async () => {
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: window.location.origin + '/login'
+      }
+    });
+    if (error) throw error;
+  };
+
   const logout = () => {
     localStorage.removeItem('token');
     setToken(null);
@@ -64,7 +101,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, register, logout }}>
+    <AuthContext.Provider value={{ user, token, loading, login, register, logout, loginWithGoogle }}>
       {children}
     </AuthContext.Provider>
   );

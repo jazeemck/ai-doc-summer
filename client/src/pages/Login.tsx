@@ -9,7 +9,7 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const { login } = useAuth();
+  const { login, loginWithGoogle } = useAuth();
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -21,8 +21,15 @@ export default function Login() {
     }
   }, [location]);
 
-  const handleGoogleLogin = () => {
-    setError('Neural Google link is temporarily disabled in this quadrant. Please use direct identifier.');
+  const handleGoogleLogin = async () => {
+    try {
+      setLoading(true);
+      await loginWithGoogle();
+    } catch (err: any) {
+      console.error('[Login] Google Fail:', err);
+      setError('Neural Google link interrupted. Please use direct login.');
+      setLoading(false);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
