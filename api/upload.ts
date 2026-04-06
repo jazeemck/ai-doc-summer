@@ -1,5 +1,11 @@
+export const config = {
+    api: {
+        bodyParser: false,
+        sizeLimit: "10mb",
+    },
+};
+
 // ── POLYFILLS: Required for pdf-parse / pdfjs-dist in Node.js serverless ──
-// pdfjs-dist expects browser APIs that don't exist in Vercel/Node.js
 if (typeof globalThis.DOMMatrix === 'undefined') {
     (globalThis as any).DOMMatrix = class DOMMatrix {
         m11 = 1; m12 = 0; m13 = 0; m14 = 0;
@@ -32,22 +38,20 @@ if (typeof globalThis.Path2D === 'undefined') {
 }
 
 import { VercelRequest, VercelResponse } from '@vercel/node';
-import { prisma } from './_lib/db';
+import { prisma, saveDocumentToDB } from './_lib/db';
 import { withCORS } from './_lib/middleware';
 import { aiService } from './_lib/ai';
 import { supabase } from './_lib/supabase';
+import { callGeminiCascade } from './_lib/gemini';
+import { uploadToStorage, getPublicUrl } from './_lib/storage';
+import { extractPdfText } from './_lib/pdfExtract';
 import { randomUUID } from 'crypto';
 import multer from 'multer';
 
-export const config = {
-    api: {
-        bodyParser: false,
-    },
-};
-
-const upload = multer({
+// ── Multer: in-memory, 10 MB cap ─────────────────────────────────────────
+const uploadMiddleware = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: 10 * 1024 * 1024 } // 10MB
+    limits: { fileSize: 10 * 1024 * 1024 },
 }).any();
 
 function runMiddleware(req: any, res: any, fn: any) {
@@ -59,209 +63,167 @@ function runMiddleware(req: any, res: any, fn: any) {
     });
 }
 
+// ── MIME → extraction strategy ───────────────────────────────────────────
+async function extractTextFromFile(
+    buffer: Buffer,
+    mimeType: string,
+    fileName: string
+): Promise<string> {
+    if (mimeType === 'application/pdf' || fileName.endsWith('.pdf')) {
+        console.log('[Upload] Extracting text from PDF via helper...');
+        return await extractPdfText(buffer);
+    }
+
+    if (
+        mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+        fileName.endsWith('.docx')
+    ) {
+        console.log('[Upload] Extracting text from DOCX...');
+        const mammoth = require('mammoth');
+        const result = await mammoth.extractRawText({ buffer });
+        return result.value;
+    }
+
+    // .txt, .md, and everything else — treat as UTF-8
+    console.log('[Upload] Reading as plain text...');
+    return buffer.toString('utf-8');
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
     return withCORS(req, res, async (req: any, res: VercelResponse) => {
         let currentStep = "INITIALIZATION";
 
         try {
-            // ── STEP 1: AUTH ────────────────────────────────────
-            currentStep = "AUTH_VERIFICATION";
-            if (!req.user) return res.status(401).json({ error: 'Auth Link Interrupted.', step: currentStep });
+            // STEP 1 — Auth check
+            if (!req.user) {
+                return res.status(401).json({ error: 'Unauthorized: Neural link not established.' });
+            }
 
-            // ── STEP 2: FILE INGESTION ──────────────────────────
+            // STEP 2 — Parse multipart body
             currentStep = "MULTIPART_INGESTION";
-            await runMiddleware(req, res, upload);
+            await runMiddleware(req, res, uploadMiddleware);
 
             const files = req.files as any[];
-            console.log(`[Upload] Multer processed. Files array length: ${files?.length || 0}`);
-            if (files && files.length > 0) {
-                files.forEach((f: any, i: number) => {
-                    console.log(`[Upload] File[${i}]: field="${f.fieldname}", name="${f.originalname}", size=${f.size}, mime="${f.mimetype}", hasBuffer=${!!f.buffer}`);
-                });
-            }
+            const body = req.body || {};
+            const action = body.action || (files?.length > 0 ? 'ingest-rag' : 'extract-document');
+            const content = body.content;
 
-            if (!files || files.length === 0) {
-                console.error(`[Upload] FAIL: No files in request. Check frontend FormData field name.`);
-                return res.status(400).json({ error: 'No File Received. Ensure the file is sent as multipart/form-data.', step: currentStep });
-            }
+            console.log(`[Upload] Processing: action=${action}, files=${files?.length || 0}`);
 
-            const file = files[0];
-            if (!file.buffer || file.buffer.length === 0) {
-                console.error(`[Upload] FAIL: File buffer is empty.`);
-                return res.status(400).json({ error: 'File buffer is empty. The file may be corrupted.', step: currentStep });
-            }
+            // ── PATH A: EXTRACT DOCUMENT (Gemini analysis + direct save) ───────
+            if (action === 'extract-document') {
+                currentStep = 'DOCUMENT_EXTRACTION';
 
-            console.log(`[Upload] ✅ File accepted: ${file.originalname} | ${file.size} bytes | Buffer: ${file.buffer.length} bytes`);
-
-            // ── STEP 3: PDF TEXT EXTRACTION ─────────────────────
-            currentStep = "TEXT_EXTRACTION";
-            let rawText = '';
-
-            try {
-                console.log(`[Upload] Starting PDF text extraction...`);
-                const pdfParseModule = require('pdf-parse');
-                const pdfParse = pdfParseModule.default || pdfParseModule;
-                console.log(`[Upload] pdf-parse loaded. Type: ${typeof pdfParse}`);
-                const pdfData = await pdfParse(file.buffer);
-                rawText = (pdfData.text || '').trim();
-                console.log(`[Upload] ✅ PDF parsed. Pages: ${pdfData.numpages}, Text length: ${rawText.length}`);
-            } catch (parseErr: any) {
-                console.error(`[Upload] ❌ PDF parse error:`, parseErr.message);
-                // Provide user-friendly error
-                const errorMsg = parseErr.message.includes('DOMMatrix') || parseErr.message.includes('Path2D')
-                    ? 'Server environment error during PDF processing. Please try again.'
-                    : `PDF extraction failed: ${parseErr.message}`;
-                return res.status(400).json({
-                    error: errorMsg,
-                    step: currentStep
-                });
-            }
-
-            // ── VALIDATION: Check extracted text quality ────────
-            console.log(`[Upload] EXTRACTED TEXT LENGTH: ${rawText.length}`);
-            console.log(`[Upload] PDF SAMPLE (first 500 chars):\n${rawText.slice(0, 500)}`);
-
-            if (rawText.length < 50) {
-                return res.status(400).json({
-                    error: 'This PDF has no readable text. It may be a scanned document (image-only) which is not supported. Please upload a PDF with selectable text.',
-                    step: currentStep
-                });
-            }
-
-            // ── STEP 4: CHUNKING ────────────────────────────────
-            currentStep = "SEMANTIC_CHUNKING";
-            const chunks: string[] = [];
-            const chunkSize = 400; // words per chunk
-            const overlap = 50;    // overlap for context continuity
-            const words = rawText.split(/\s+/).filter(w => w.length > 0);
-
-            console.log(`[Upload] Total words extracted: ${words.length}`);
-
-            for (let i = 0; i < words.length; i += (chunkSize - overlap)) {
-                const chunk = words.slice(i, i + chunkSize).join(' ').trim();
-                if (chunk.length > 50) { // Reject tiny/empty chunks
-                    chunks.push(chunk);
+                const file = files?.[0];
+                if (!file && !content?.trim()) {
+                    return res.status(400).json({ error: 'Provide a file or text content.' });
                 }
-                if (i + chunkSize >= words.length) break;
-            }
 
-            console.log(`[Upload] TOTAL CHUNKS: ${chunks.length}`);
+                let rawText = '';
+                let fileName = 'pasted-text.txt';
+                let mimeType = 'text/plain';
+                let storagePath = '';
+                let publicUrl = '';
+                let fileSize = 0;
 
-            if (chunks.length === 0) {
-                return res.status(400).json({
-                    error: 'PDF text was extracted but no meaningful chunks could be created. The document may contain only headers or very short text.',
-                    step: currentStep
-                });
-            }
+                if (file) {
+                    fileName = file.originalname;
+                    mimeType = file.mimetype;
+                    fileSize = file.size;
+                    rawText = await extractTextFromFile(file.buffer, mimeType, fileName);
 
-            // Log quality of first few chunks
-            chunks.slice(0, 3).forEach((c, i) => {
-                console.log(`[Upload] Chunk ${i + 1} (${c.length} chars): ${c.slice(0, 120)}...`);
-            });
-
-            // ── STEP 5: SUPABASE STORAGE ────────────────────────
-            currentStep = "SUPABASE_UPLOAD";
-            const fileName = file.originalname || `neural_${Date.now()}.pdf`;
-            const filePath = `${req.user.id}/${randomUUID()}_${fileName}`;
-
-            const { error: storageErr } = await supabase.storage
-                .from('documents')
-                .upload(filePath, file.buffer, { contentType: file.mimetype });
-
-            if (storageErr) throw new Error(`Supabase Storage Fail: ${storageErr.message}`);
-
-            const { data: { publicUrl } } = supabase.storage
-                .from('documents')
-                .getPublicUrl(filePath);
-
-            // ── STEP 6: DATABASE RECORD ─────────────────────────
-            currentStep = "DATABASE_RECORD";
-            const document = await prisma.document.create({
-                data: {
-                    name: fileName,
-                    url: publicUrl,
-                    size: file.size,
-                    userId: req.user.id,
-                    status: 'PROCESSING'
-                }
-            });
-
-            console.log(`[Upload] Document record created: ${document.id}`);
-
-            // ── STEP 7: EMBEDDINGS ──────────────────────────────
-            currentStep = "BATCH_EMBEDDING";
-            console.log(`[Upload] Generating embeddings for ${chunks.length} chunks...`);
-
-            let embeddings: number[][] = [];
-            try {
-                embeddings = await aiService.generateEmbeddingsBatch(chunks);
-                console.log(`[Upload] Embeddings generated: ${embeddings.length} vectors`);
-
-                if (embeddings.length > 0) {
-                    console.log(`[Upload] Embedding dimension: ${embeddings[0].length}`);
-                }
-            } catch (embErr: any) {
-                console.error(`[Upload] Embedding generation failed:`, embErr.message);
-                console.warn(`[Upload] Proceeding with zero-vector fallback for text-only indexing.`);
-            }
-
-            // ── STEP 8: VECTOR DB INSERTION ─────────────────────
-            currentStep = "VECTOR_TRANSACTION";
-            console.log(`[Upload] Inserting ${chunks.length} chunks into vector database...`);
-
-            const subBatches: string[][] = [];
-            const batchSize = 20;
-            for (let i = 0; i < chunks.length; i += batchSize) {
-                subBatches.push(chunks.slice(i, i + batchSize));
-            }
-
-            for (const [batchIdx, subBatch] of subBatches.entries()) {
-                console.log(`[Upload] SQL Batch ${batchIdx + 1}/${subBatches.length} (${subBatch.length} chunks)`);
-
-                const insertPromises = subBatch.map((chunk, i) => {
-                    const globalIdx = (batchIdx * batchSize) + i;
-                    const id = randomUUID();
-                    const embedding = embeddings[globalIdx] || new Array(768).fill(0);
-                    const vectorStr = `[${embedding.join(',')}]`;
-
-                    // Validate before insert
-                    if (!chunk || chunk.trim().length === 0) {
-                        console.warn(`[Upload] Skipping empty chunk at index ${globalIdx}`);
-                        return prisma.$executeRawUnsafe('SELECT 1');
+                    if (rawText.trim().length < 30) {
+                        return res.status(400).json({ error: 'No readable text found in document.' });
                     }
 
-                    return prisma.$executeRawUnsafe(
-                        `INSERT INTO "Chunk" (id, content, "documentId", embedding, "userId") VALUES ($1, $2, $3, CAST($4 AS vector), $5)`,
-                        id, chunk, document.id, vectorStr, req.user.id
-                    );
+                    storagePath = await uploadToStorage(file.buffer, fileName, mimeType, req.user.id);
+                    publicUrl = getPublicUrl(storagePath);
+                } else {
+                    rawText = content!.trim();
+                    fileSize = Buffer.byteLength(rawText, 'utf-8');
+                }
+
+                console.log(`[Upload] Starting Gemini analysis...`);
+                const geminiResult = await callGeminiCascade(rawText, fileName);
+
+                const record = await saveDocumentToDB({
+                    fileName,
+                    mimeType,
+                    extractedText: rawText,
+                    metadata: geminiResult,
+                    storagePath,
+                    publicUrl,
+                    size: fileSize,
+                    userId: req.user.id,
+                    status: 'COMPLETED',
                 });
 
-                await prisma.$transaction(insertPromises);
+                return res.status(200).json({ ...record, status: 'completed' });
             }
 
-            // ── STEP 9: FINALIZE ────────────────────────────────
-            await prisma.document.update({
-                where: { id: document.id },
-                data: { status: 'COMPLETED' }
-            });
+            // ── PATH B: INGEST RAG (Original vector processing logic) ──────────
+            if (action === 'ingest-rag') {
+                currentStep = "RAG_PROCESSING";
+                const file = files?.[0];
+                if (!file) return res.status(400).json({ error: 'No file received for ingestion.' });
 
-            console.log(`[Upload] ✅ SUCCESS: ${chunks.length} chunks stored for document ${document.id}`);
-            console.log(`[Upload] ✅ Embeddings: ${embeddings.length > 0 ? 'YES' : 'ZERO-VECTOR FALLBACK'}`);
+                console.log(`[Upload] RAG Ingestion for: ${file.originalname}`);
+                const rawText = await extractTextFromFile(file.buffer, file.mimetype, file.originalname);
 
-            res.status(200).json({
-                status: "completed",
-                documentId: document.id,
-                debug: {
-                    textLength: rawText.length,
-                    totalChunks: chunks.length,
-                    embeddingsGenerated: embeddings.length,
-                    embeddingDimension: embeddings[0]?.length || 0
+                if (rawText.length < 50) {
+                    return res.status(400).json({ error: 'Document too small or no readable text.' });
                 }
-            });
+
+                // Chunking logic
+                const chunks: string[] = [];
+                const words = rawText.split(/\s+/).filter(w => w.length > 0);
+                for (let i = 0; i < words.length; i += 350) { // Using 350-50 overlap
+                    chunks.push(words.slice(i, i + 400).join(' ').trim());
+                    if (i + 400 >= words.length) break;
+                }
+
+                // Supabase upload (legacy path uses custom filename logic)
+                const filePath = `${req.user.id}/${randomUUID()}_${file.originalname}`;
+                await supabase.storage.from('documents').upload(filePath, file.buffer, { contentType: file.mimetype });
+                const { data: { publicUrl } } = supabase.storage.from('documents').getPublicUrl(filePath);
+
+                // DB Record
+                const document = await prisma.document.create({
+                    data: {
+                        name: file.originalname,
+                        url: publicUrl,
+                        size: file.size,
+                        userId: req.user.id,
+                        status: 'PROCESSING'
+                    }
+                });
+
+                // Embeddings
+                const embeddings = await aiService.generateEmbeddingsBatch(chunks);
+
+                // Vector Insertion
+                for (let i = 0; i < chunks.length; i++) {
+                    const vector = embeddings[i] || new Array(768).fill(0);
+                    const vectorStr = `[${vector.join(',')}]`;
+                    await prisma.$executeRawUnsafe(
+                        `INSERT INTO "Chunk" (id, content, "documentId", embedding, "userId") VALUES ($1, $2, $3, CAST($4 AS vector), $5)`,
+                        randomUUID(), chunks[i], document.id, vectorStr, req.user.id
+                    );
+                }
+
+                await prisma.document.update({
+                    where: { id: document.id },
+                    data: { status: 'COMPLETED' }
+                });
+
+                return res.status(200).json({ status: "completed", documentId: document.id, totalChunks: chunks.length });
+            }
+
+            return res.status(400).json({ error: 'Invalid action.' });
 
         } catch (err: any) {
-            console.error(`[Upload] ❌ CRITICAL FAIL at ${currentStep}:`, err.message);
-            res.status(500).json({ error: err.message, step: currentStep });
+            console.error(`[Upload] ❌ Error at ${currentStep}:`, err.message);
+            return res.status(500).json({ error: err.message, step: currentStep });
         }
     });
 }

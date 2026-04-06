@@ -30,7 +30,7 @@ export function useDocumentUpload() {
             // Get JWT from localStorage (existing auth pattern)
             const token = localStorage.getItem('token');
 
-            const response = await fetch(`${API_BASE_URL}/upload-document`, {
+            const response = await fetch(`${API_BASE_URL}/upload`, {
                 method: 'POST',
                 headers: {
                     // Do NOT set Content-Type — browser sets multipart/form-data with boundary
