@@ -20,8 +20,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             const token = auth.signToken(user);
             res.setHeader('Set-Cookie', `token=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=604800`);
             res.status(200).json({ user, token });
-        } catch (err) {
-            res.status(500).json({ error: 'Sync failure during login.' });
+        } catch (err: any) {
+            console.error('[Login Error]', err);
+            res.status(500).json({ error: `Sync failure during login: ${err.message}` });
         }
     });
 }
