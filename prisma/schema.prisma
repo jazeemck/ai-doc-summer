@@ -35,6 +35,7 @@ model Document {
 model Chunk {
   id         String   @id @default(cuid())
   content    String
+  embedding  Unsupported("vector(768)")?
   documentId String
   document   Document @relation(fields: [documentId], references: [id])
   userId     String
