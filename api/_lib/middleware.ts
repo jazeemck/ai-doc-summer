@@ -35,7 +35,10 @@ export async function withCORS(req: VercelRequest, res: VercelResponse, handler:
         const token = authHeader.split(' ')[1];
         const user = auth.verifyToken(token);
         if (user) {
+            console.log('[Middleware] Identity Confirmed:', user.email);
             (req as any).user = user;
+        } else {
+            console.warn('[Middleware] Identity Refused: Invalid Neural Token.');
         }
     } else if (req.headers.cookie) {
         // Also support token from cookies (HttpOnly flow)
@@ -46,8 +49,15 @@ export async function withCORS(req: VercelRequest, res: VercelResponse, handler:
 
         if (token) {
             const user = auth.verifyToken(token);
-            if (user) (req as any).user = user;
+            if (user) {
+                console.log('[Middleware] Identity Confirmed (Cookie):', user.email);
+                (req as any).user = user;
+            } else {
+                console.warn('[Middleware] Identity Refused (Cookie): Invalid Neural Token.');
+            }
         }
+    } else {
+        console.warn('[Middleware] No Identity Found. Headers:', Object.keys(req.headers));
     }
 
     return handler(req, res);
