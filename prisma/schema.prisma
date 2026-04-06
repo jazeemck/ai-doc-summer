@@ -39,10 +39,11 @@ model Document {
 model Chunk {
   id         String   @id @default(cuid())
   content    String
-  // Stored as pgvector
+  // Stored as pgvector(768)
   embedding  Unsupported("vector")?
   documentId String
   document   Document @relation(fields: [documentId], references: [id])
+  userId     String
 }
 
 model ChatSession {

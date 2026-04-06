@@ -38,8 +38,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     if (embedding) {
                         const vectorStr = `[${embedding.join(',')}]`;
                         const chunks: any[] = await prisma.$queryRawUnsafe(`
-              SELECT content, (embedding <=> $1::vector) as distance FROM "Chunk" d WHERE "documentId" = $2 ORDER BY distance ASC LIMIT 3;
-            `, vectorStr, documentId);
+              SELECT content, (embedding <=> $1::vector) as distance FROM "Chunk" d WHERE "documentId" = $2 AND "userId" = $3 ORDER BY distance ASC LIMIT 3;
+            `, vectorStr, documentId, req.user.id);
                         contextText = chunks.map(c => c.content).join('\n\n');
                     }
                 }

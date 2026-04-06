@@ -65,7 +65,7 @@ export const aiService = {
 
     async generateEmbedding(text: string) {
         const apiKey = process.env.GEMINI_API_KEY;
-        const modelName = 'text-embedding-004';
+        const modelName = 'embedding-001';
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:embedContent?key=${apiKey}`;
 
         const response = await fetch(url, {
@@ -82,7 +82,7 @@ export const aiService = {
 
     async generateEmbeddingsBatch(chunks: string[]) {
         const apiKey = process.env.GEMINI_API_KEY;
-        const modelName = 'text-embedding-004';
+        const modelName = 'embedding-001';
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:batchEmbedContents?key=${apiKey}`;
 
         const requests = chunks.map(text => ({

@@ -3,8 +3,8 @@ import { useAuth } from '../context/AuthContext';
 import { useNavigate, Link } from 'react-router-dom';
 import { useDropzone } from 'react-dropzone';
 import { motion, AnimatePresence } from 'framer-motion';
-import { 
-  LogOut, UploadCloud, FileText, CheckCircle2, AlertCircle, 
+import {
+  LogOut, UploadCloud, FileText, CheckCircle2, AlertCircle,
   MessageSquare, Database, Moon, Sun, Settings, Sparkles,
   ArrowRight, Loader2
 } from 'lucide-react';
@@ -24,7 +24,7 @@ export default function Dashboard() {
   const { user, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
-  
+
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
   const [uploading, setUploading] = useState(false);
 
@@ -45,33 +45,47 @@ export default function Dashboard() {
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return;
-    
+    if (!user) return;
+
     setUploading(true);
-    const formData = new FormData();
-    acceptedFiles.forEach(file => {
-      formData.append('files', file);
-    });
+    for (const file of acceptedFiles) {
+      try {
+        const fileName = `${user.id}/${Date.now()}_${file.name}`;
 
-    try {
-      const uploadPromise = api.post('/upload', formData);
-      
-      toast.promise(uploadPromise, {
-        loading: 'Syncing to Neural Grid...',
-        success: 'Knowledge Base Updated!',
-        error: 'Neural Link Interrupted.',
-      });
+        // 1. DUAL INGRESS - Supabase Storage
+        const { error: storageError } = await supabase.storage
+          .from('documents')
+          .upload(fileName, file);
 
-      await uploadPromise;
-      fetchDocuments();
-    } catch (err: any) {
-      console.error('Upload failed', err);
-    } finally {
-      setUploading(false);
+        if (storageError) throw storageError;
+
+        // 2. DUAL INGRESS - Backend Neural Sync
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('user_id', user.id);
+
+        const uploadPromise = api.post('/upload', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' }
+        });
+
+        toast.promise(uploadPromise, {
+          loading: `Syncing ${file.name} to Neural Grid...`,
+          success: 'Knowledge Base Updated!',
+          error: 'Neural Link Interrupted.',
+        });
+
+        await uploadPromise;
+        fetchDocuments();
+      } catch (err: any) {
+        console.error('[Dashboard] Sync Fail:', err.message);
+        toast.error(`Ingest Failed: ${err.message}`);
+      }
     }
-  }, []);
+    setUploading(false);
+  }, [user]);
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({ 
-    onDrop, 
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
     accept: {
       'application/pdf': ['.pdf'],
       'text/plain': ['.txt']
@@ -93,7 +107,7 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-background text-foreground font-sans overflow-hidden relative flex selection:bg-teal-500/30">
-      
+
       {/* ── Background Elements ───────────────────────────────────── */}
       <div className="fixed inset-0 z-0 pointer-events-none">
         <div className="absolute top-[-10%] right-[-10%] w-[60%] h-[60%] rounded-full bg-teal-500/5 blur-[120px] animate-fluid-1" />
@@ -114,29 +128,27 @@ export default function Dashboard() {
         <div className="px-5 py-6 space-y-1.5">
           <button
             onClick={() => navigate('/dashboard')}
-            className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all text-xs group ${
-              window.location.pathname === '/dashboard' 
-                ? 'bg-teal-500/10 text-teal-300 border border-teal-500/10 shadow-sm' 
+            className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all text-xs group ${window.location.pathname === '/dashboard'
+                ? 'bg-teal-500/10 text-teal-300 border border-teal-500/10 shadow-sm'
                 : 'text-slate-500 hover:bg-white/5 hover:text-white border border-transparent'
-            }`}
+              }`}
           >
             <Database size={16} className={window.location.pathname === '/dashboard' ? 'text-teal-400' : 'text-slate-600'} />
             <span className="font-bold uppercase tracking-widest text-[10px]">Knowledge Base</span>
           </button>
-          
+
           <button
             onClick={() => navigate('/chat')}
-            className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all text-xs group ${
-              window.location.pathname === '/chat' 
-                ? 'bg-teal-500/10 text-teal-300 border border-teal-500/10 shadow-sm' 
+            className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all text-xs group ${window.location.pathname === '/chat'
+                ? 'bg-teal-500/10 text-teal-300 border border-teal-500/10 shadow-sm'
                 : 'text-slate-500 hover:bg-white/5 hover:text-white border border-transparent'
-            }`}
+              }`}
           >
             <MessageSquare size={16} className={window.location.pathname === '/chat' ? 'text-slate-600 group-hover:text-slate-400' : 'text-slate-600'} />
             <span className="font-bold uppercase tracking-widest text-[10px]">Neural Chat</span>
           </button>
         </div>
-        
+
         <div className="p-6 mt-auto border-t border-white/5 bg-black/20">
           <div className="flex items-center gap-4 px-4 py-3 rounded-2xl bg-white/5 border border-white/5">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-teal-400 to-blue-500 flex items-center justify-center text-white font-black text-lg shadow-lg">
@@ -170,12 +182,12 @@ export default function Dashboard() {
           </div>
         </header>
 
-        <motion.div 
+        <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           className="max-w-5xl mx-auto w-full px-10 py-16"
         >
-          
+
           <div className="mb-12">
             <h1 className="text-4xl font-black text-white tracking-tighter mb-3">Neuro Library</h1>
             <p className="text-slate-500 text-base font-bold max-w-2xl leading-relaxed">
@@ -183,27 +195,26 @@ export default function Dashboard() {
             </p>
           </div>
 
-          <div 
-            {...getRootProps()} 
-            className={`glass-card p-12 rounded-3xl border-2 border-dashed text-center transition-all group relative overflow-hidden ${
-              isDragActive ? 'border-teal-500 bg-teal-500/10' : 'border-white/5 hover:border-teal-500/20 bg-white/5'
-            }`}
+          <div
+            {...getRootProps()}
+            className={`glass-card p-12 rounded-3xl border-2 border-dashed text-center transition-all group relative overflow-hidden ${isDragActive ? 'border-teal-500 bg-teal-500/10' : 'border-white/5 hover:border-teal-500/20 bg-white/5'
+              }`}
           >
             <div className="absolute inset-0 bg-gradient-to-br from-teal-500/5 to-transparent pointer-events-none" />
             <input {...getInputProps()} />
-            
+
             <div className={`w-16 h-16 mx-auto rounded-2xl bg-background border border-white/5 flex items-center justify-center transition-all duration-500 shadow-xl relative z-10 ${isDragActive ? 'scale-110 shadow-teal-500/20' : 'group-hover:scale-105'}`}>
               <UploadCloud size={32} className="text-teal-400" />
             </div>
-            
+
             <h3 className="mt-8 text-2xl font-black text-white tracking-tight relative z-10 uppercase tracking-widest">
               {isDragActive ? 'Release Neural Assets' : 'Deploy Assets to Grid'}
             </h3>
             <p className="mt-3 text-slate-500 font-bold text-sm relative z-10">DROP PDF/TXT ARCHIVES OR CLICK TO INITIATE TRANSFER</p>
-            
+
             <AnimatePresence>
               {uploading && (
-                <motion.div 
+                <motion.div
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   className="mt-10 flex flex-col items-center gap-4 relative z-10"
@@ -223,7 +234,7 @@ export default function Dashboard() {
               </h3>
               <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{documents.length} Units Online</span>
             </div>
-            
+
             <div className="space-y-4">
               {documents.length === 0 ? (
                 <div className="glass-card p-20 rounded-[3rem] border border-white/5 text-center">
@@ -231,9 +242,9 @@ export default function Dashboard() {
                 </div>
               ) : (
                 documents.map((doc) => (
-                  <motion.div 
+                  <motion.div
                     layout
-                    key={doc.id} 
+                    key={doc.id}
                     className="glass-card p-6 flex items-center justify-between rounded-[2rem] border border-white/5 hover:border-white/10 transition-all group"
                   >
                     <div className="flex items-center gap-6">
@@ -248,7 +259,7 @@ export default function Dashboard() {
                         </div>
                       </div>
                     </div>
-                    
+
                     <div className="flex items-center gap-4">
                       {doc.status === 'COMPLETED' ? (
                         <div className="flex items-center gap-2 px-4 py-2 bg-teal-400/10 border border-teal-400/20 text-teal-400 rounded-full text-[10px] font-black uppercase tracking-widest">
@@ -263,7 +274,7 @@ export default function Dashboard() {
                           <AlertCircle size={12} /> Refused
                         </div>
                       )}
-                      <button 
+                      <button
                         onClick={() => navigate('/chat')}
                         className="p-3 rounded-xl bg-white/5 hover:bg-white/10 text-white transition-all opacity-0 group-hover:opacity-100"
                       >
@@ -275,7 +286,7 @@ export default function Dashboard() {
               )}
             </div>
           </div>
-          
+
         </motion.div>
       </div>
     </div>

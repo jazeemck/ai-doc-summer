@@ -5,23 +5,19 @@ import { aiService } from './_lib/ai';
 import { supabase } from './_lib/supabase';
 import { randomUUID } from 'crypto';
 import multer from 'multer';
+import PDFParser from 'pdf2json';
 
-// 1. Vercel Payload Configuration
 export const config = {
     api: {
-        bodyParser: false, // Disabling bodyParser to handle raw multipart flow
+        bodyParser: false,
     },
 };
 
-// 2. Memory Ingestion Engine (4.5MB Limit Guard)
 const upload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: 4.5 * 1024 * 1024 } // 4.5MB Production Limit
-}).array('files');
+    limits: { fileSize: 4.5 * 1024 * 1024 }
+}).single('file');
 
-/**
- * PRODUCTION HARDENED: Cloud-Direct Neural Ingestion
- */
 function runMiddleware(req: any, res: any, fn: any) {
     return new Promise((resolve, reject) => {
         fn(req, res, (result: any) => {
@@ -31,99 +27,98 @@ function runMiddleware(req: any, res: any, fn: any) {
     });
 }
 
+/**
+ * PRODUCTION HARDENED: Robust Semantic PDF Ingestion
+ */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
     return withCORS(req, res, async (req: any, res: VercelResponse) => {
-        if (!req.user) return res.status(401).json({ error: 'Identity unknown.' });
+        if (!req.user) return res.status(401).json({ error: 'Auth Link Interrupted.' });
 
         try {
             await runMiddleware(req, res, upload);
-            const files = req.files as any[];
+            const file = req.file;
+            if (!file) return res.status(400).json({ error: 'No File Received.' });
 
-            if (!files || files.length === 0) return res.status(400).json({ error: 'No neural assets found.' });
+            // 1. CLOUD PERSISTENCE (Supabase Storage)
+            const fileName = file.originalname || `neural_${Date.now()}.pdf`;
+            const filePath = `${req.user.id}/${randomUUID()}_${fileName}`;
 
-            const uploadedDocs = [];
+            const { error: storageErr } = await supabase.storage
+                .from('documents')
+                .upload(filePath, file.buffer, { contentType: file.mimetype });
 
-            // A. Infrastructure Verification
-            const { data: buckets } = await supabase.storage.listBuckets();
-            if (!buckets?.find(b => b.name === 'documents')) {
-                await supabase.storage.createBucket('documents', { public: true });
-            }
+            if (storageErr) throw storageErr;
 
-            for (const file of files) {
-                const name = file.originalname || `doc_${Date.now()}.pdf`;
-                const filePath = `${req.user.id}/${randomUUID()}_${name}`;
+            const { data: { publicUrl } } = supabase.storage
+                .from('documents')
+                .getPublicUrl(filePath);
 
-                // B. CLOUD STORAGE DEPLOYMENT
-                const { error: storageError } = await supabase.storage
-                    .from('documents')
-                    .upload(filePath, file.buffer, {
-                        contentType: file.mimetype,
-                        upsert: true
-                    });
+            // 2. INITIAL DOCUMENT RECORD (User Isolated)
+            const document = await prisma.document.create({
+                data: {
+                    name: fileName,
+                    url: publicUrl,
+                    size: file.size,
+                    userId: req.user.id,
+                    status: 'PROCESSING'
+                }
+            });
 
-                if (storageError) throw new Error(`Cloud Storage Fail: ${storageError.message}`);
+            // 3. PARSING & INGESTION PROMISE (Awaiting for Serverless sync)
+            await new Promise((resolve, reject) => {
+                const pdfParser = new (PDFParser as any)(null, 1);
 
-                const { data: { publicUrl } } = supabase.storage
-                    .from('documents')
-                    .getPublicUrl(filePath);
-
-                // C. NEURAL RECORD CREATION
-                const document = await prisma.document.create({
-                    data: {
-                        name,
-                        url: publicUrl,
-                        size: file.size,
-                        status: 'PROCESSING',
-                        userId: req.user.id
-                    }
+                pdfParser.on("pdfParser_dataError", (errData: any) => {
+                    reject(new Error(errData.parserError));
                 });
-                uploadedDocs.push(document);
 
-                // D. INTELLECTUAL EXTRACTION & BATCH EMBEDDING (Background simulation)
-                (async () => {
-                    let rawText = '';
+                pdfParser.on("pdfParser_dataReady", async () => {
                     try {
-                        const ext = name.toLowerCase().split('.').pop();
-                        if (ext === 'pdf') {
-                            const pdfParse = require('pdf-parse');
-                            const data = await pdfParse(file.buffer);
-                            rawText = data.text;
-                        } else if (ext === 'docx') {
-                            const mammoth = require('mammoth');
-                            const result = await mammoth.extractRawText({ buffer: file.buffer });
-                            rawText = result.value;
-                        } else {
-                            rawText = file.buffer.toString('utf-8');
+                        const rawText = pdfParser.getRawTextContent().replace(/\r\n/g, " ");
+
+                        // 4. SEMANTIC CHUNKING (400 words, 50-word overlap)
+                        const words = rawText.split(/\s+/);
+                        const chunks: string[] = [];
+                        const chunkSize = 400;
+                        const overlap = 50;
+
+                        for (let i = 0; i < words.length; i += (chunkSize - overlap)) {
+                            const chunk = words.slice(i, i + chunkSize).join(' ');
+                            if (chunk.trim().length > 10) chunks.push(chunk);
+                            if (i + chunkSize >= words.length) break;
                         }
 
-                        if (rawText.trim()) {
-                            const chunks = (rawText.match(/[^.!?]+[.!?]+/g) || [rawText]).map(s => s.trim()).filter(s => s.length > 50);
+                        // 5. GEMINI EMBEDDINGS (768D)
+                        if (chunks.length > 0) {
                             const embeddings = await aiService.generateEmbeddingsBatch(chunks);
 
                             for (let i = 0; i < chunks.length; i++) {
                                 if (embeddings[i]) {
                                     const vectorStr = `[${embeddings[i].join(',')}]`;
                                     await prisma.$executeRaw`
-                                       INSERT INTO "Chunk" (id, content, "documentId", embedding)
-                                       VALUES (${randomUUID()}, ${chunks[i]}, ${document.id}, ${vectorStr}::vector)
-                                   `;
+                                        INSERT INTO "Chunk" (id, content, "documentId", embedding, "userId")
+                                        VALUES (${randomUUID()}, ${chunks[i]}, ${document.id}, ${vectorStr}::vector, ${req.user.id})
+                                    `;
                                 }
                             }
                         }
+
                         await prisma.document.update({ where: { id: document.id }, data: { status: 'COMPLETED' } });
+                        resolve(true);
                     } catch (e) {
                         await prisma.document.update({ where: { id: document.id }, data: { status: 'FAILED' } });
+                        reject(e);
                     }
-                })();
-            }
+                });
 
-            res.status(200).json({ documents: uploadedDocs });
+                pdfParser.parseBuffer(file.buffer);
+            });
+
+            res.status(200).json({ status: 'success', message: 'PDF ingested successfully' });
 
         } catch (err: any) {
-            if (err.code === 'LIMIT_FILE_SIZE') {
-                return res.status(413).json({ error: 'Payload too large! Vercel limit: 4.5MB.' });
-            }
-            res.status(500).json({ error: 'Neural ingestion failure.' });
+            console.error('[NeuralIngest] Fail:', err.message);
+            res.status(500).json({ error: err.message || 'Internal Neural Failure' });
         }
     });
 }
