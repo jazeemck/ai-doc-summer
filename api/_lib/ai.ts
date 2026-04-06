@@ -15,14 +15,23 @@ export const aiService = {
 
         const attemptGeneration = async (model: string) => {
             const url = `https://generativelanguage.googleapis.com/v1/models/${model}:streamGenerateContent?key=${apiKey}&alt=sse`;
+
+            // ── RESTRUCTURE: Merge systemInstruction into FIRST user message for maximum compatibility ──
+            const finalContents = JSON.parse(JSON.stringify(params.contents)); // Deep clone
+            if (params.systemInstruction && finalContents.length > 0) {
+                const firstPart = finalContents[0].parts?.[0];
+                if (firstPart && firstPart.text) {
+                    firstPart.text = `SYSTEM CONTEXT: ${params.systemInstruction}\n\n${firstPart.text}`;
+                }
+            } else if (params.systemInstruction) {
+                finalContents.unshift({ role: 'user', parts: [{ text: `SYSTEM CONTEXT: ${params.systemInstruction}` }] });
+            }
+
             const response = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    contents: params.contents,
-                    systemInstruction: params.systemInstruction ? {
-                        parts: [{ text: params.systemInstruction }]
-                    } : undefined,
+                    contents: finalContents,
                     safetySettings: [
                         { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
                         { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
@@ -30,7 +39,7 @@ export const aiService = {
                         { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
                     ],
                     generationConfig: {
-                        temperature: 0.2,
+                        temperature: 0.7,
                         maxOutputTokens: 2048,
                     }
                 })
