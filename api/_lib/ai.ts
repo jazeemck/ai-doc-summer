@@ -21,7 +21,17 @@ export const aiService = {
                 contents: params.contents,
                 systemInstruction: params.systemInstruction ? {
                     parts: [{ text: params.systemInstruction }]
-                } : undefined
+                } : undefined,
+                safetySettings: [
+                    { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+                    { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+                    { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+                    { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+                ],
+                generationConfig: {
+                    temperature: 0.2,
+                    maxOutputTokens: 2048,
+                }
             })
         });
 
@@ -53,8 +63,17 @@ export const aiService = {
                             const jsonStr = line.replace('data: ', '');
                             if (jsonStr.trim() === '[DONE]') continue;
                             const data = JSON.parse(jsonStr);
-                            const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-                            if (text) yield { text };
+
+                            const candidate = data.candidates?.[0];
+                            const text = candidate?.content?.parts?.[0]?.text;
+
+                            if (text) {
+                                yield { text };
+                            } else if (candidate?.finishReason && candidate.finishReason !== 'STOP') {
+                                yield { text: `[Neural link interrupted: Model reported finishReason ${candidate.finishReason}]` };
+                            } else if (data.promptFeedback?.blockReason) {
+                                yield { text: `[Content Blocked: The neural grid flagged this request as ${data.promptFeedback.blockReason}]` };
+                            }
                         } catch (e) { }
                     }
                 }

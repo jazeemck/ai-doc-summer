@@ -230,6 +230,10 @@ export default function Chat() {
                   setMessages(prev => prev.map(msg =>
                     msg.id === astTempId ? { ...msg, sources: data.sources, sourceType: data.sourceType } : msg
                   ));
+                } else if (data.type === 'error') {
+                  setMessages(prev => prev.map(msg =>
+                    msg.id === astTempId ? { ...msg, content: '❌ Neural Link Interrupt: ' + data.text } : msg
+                  ));
                 }
               } catch (e) { }
             }
