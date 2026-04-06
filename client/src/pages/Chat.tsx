@@ -6,7 +6,7 @@ import {
   LogOut, Send, MessageSquare, Plus, User as UserIcon, Settings,
   ChevronRight, Menu, Database, Copy, Upload, X,
   FileText, Loader2, AlertCircle, CheckCircle2, Sparkles,
-  Cpu, Hash
+  Cpu, Hash, Trash2, Eye, ExternalLink, ScrollText
 } from 'lucide-react';
 import api from '../lib/api';
 import { supabase } from '../lib/supabaseClient';
@@ -59,6 +59,9 @@ export default function Chat() {
 
   // Drag state
   const [isDragging, setIsDragging] = useState(false);
+
+  // Preview state
+  const [previewDoc, setPreviewDoc] = useState<any | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -345,6 +348,35 @@ export default function Chat() {
     navigate('/login');
   };
 
+  const handleDeleteDocument = async (e: React.MouseEvent, doc: any) => {
+    e.stopPropagation();
+    if (!window.confirm(`Purge this neural fragment? (${doc.name})`)) return;
+
+    try {
+      await api.delete(`/documents`, { params: { id: doc.id } });
+      setLibraryDocuments(prev => prev.filter(d => d.id !== doc.id));
+      showToast('Neural fragment purged.', 'success');
+
+      if (doc.id === documentId) {
+        setDocumentId(null);
+        setUploadedFile(null);
+      }
+    } catch (err: any) {
+      showToast(err.response?.data?.error || 'Failed to purge memory.', 'error');
+    }
+  };
+
+  const handlePreviewDocument = (e: React.MouseEvent, doc: any) => {
+    e.stopPropagation();
+    const isPdf = doc.name?.toLowerCase().endsWith('.pdf') || doc.mimeType === 'application/pdf';
+
+    if (isPdf && doc.url) {
+      window.open(doc.url, '_blank');
+    } else {
+      setPreviewDoc(doc);
+    }
+  };
+
 
   const handleDragStart = (e: React.DragEvent, doc: any) => {
     e.dataTransfer.setData('application/json', JSON.stringify({
@@ -501,7 +533,7 @@ export default function Chat() {
                 <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-4 mb-4">Ingested Contexts</h3>
                 <div className="space-y-1">
                   {libraryDocuments.map(doc => (
-                    <button
+                    <div
                       key={doc.id}
                       draggable="true"
                       onDragStart={(e) => handleDragStart(e, doc)}
@@ -510,14 +542,31 @@ export default function Chat() {
                         setUploadedFile({ name: doc.name } as any);
                         showToast(`Context switched`, 'success');
                       }}
-                      className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl transition-all text-[10px] group ${documentId === doc.id
+                      className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl transition-all text-[10px] group cursor-pointer ${documentId === doc.id
                         ? 'bg-cyan-500/10 text-cyan-300 border border-cyan-500/10'
                         : 'text-slate-600 hover:bg-white/5 active:scale-95'
                         }`}
                     >
                       <FileText size={12} className={documentId === doc.id ? 'text-cyan-400' : 'text-slate-700'} />
                       <span className="truncate flex-1 text-left font-bold uppercase tracking-tight">{doc.name}</span>
-                    </button>
+
+                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          onClick={(e) => handlePreviewDocument(e, doc)}
+                          className="p-1.5 rounded-lg hover:bg-white/10 text-slate-500 hover:text-cyan-400 transition-colors"
+                          title="Preview neural data"
+                        >
+                          <Eye size={12} />
+                        </button>
+                        <button
+                          onClick={(e) => handleDeleteDocument(e, doc)}
+                          className="p-1.5 rounded-lg hover:bg-red-500/10 text-slate-500 hover:text-red-400 transition-colors"
+                          title="Purge fragment"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -769,6 +818,68 @@ export default function Chat() {
           </div>
         </div>
       </div>
+
+      <AnimatePresence>
+        {previewDoc && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[110] flex items-center justify-center p-6 bg-black/80 backdrop-blur-xl"
+            onClick={() => setPreviewDoc(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, y: 30 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.9, y: 30 }}
+              className="bg-zinc-900 border border-white/10 w-full max-w-4xl max-h-[85vh] rounded-[2.5rem] shadow-2xl flex flex-col overflow-hidden"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="p-6 border-b border-white/5 flex items-center justify-between bg-black/20">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-2xl bg-cyan-500/10 flex items-center justify-center text-cyan-400">
+                    <ScrollText size={24} />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-black text-white uppercase tracking-tighter">{previewDoc.name}</h2>
+                    <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">Neural Fragment Extraction • {Math.round(previewDoc.size / 1024)} KB</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setPreviewDoc(null)}
+                  className="p-3 bg-white/5 hover:bg-white/10 rounded-2xl transition-all text-slate-400 hover:text-white"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-10 font-mono text-sm text-slate-300 leading-relaxed scrollbar-hide">
+                <div className="bg-black/40 border border-white/5 rounded-3xl p-8 whitespace-pre-wrap selection:bg-cyan-500/30">
+                  {previewDoc.extractedText || "No readable data found in this fragment."}
+                </div>
+              </div>
+
+              <div className="p-6 border-t border-white/5 bg-black/20 flex justify-end gap-4">
+                <button
+                  onClick={() => setPreviewDoc(null)}
+                  className="px-6 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-[11px] font-black uppercase text-slate-400 transition-all"
+                >
+                  Close
+                </button>
+                {previewDoc.url && (
+                  <button
+                    onClick={() => window.open(previewDoc.url, '_blank')}
+                    className="px-6 py-2.5 rounded-xl bg-gradient-to-br from-cyan-400 to-blue-600 text-white text-[11px] font-black uppercase tracking-widest flex items-center gap-2 shadow-lg hover:shadow-cyan-500/20"
+                  >
+                    <ExternalLink size={14} />
+                    Open Original
+                  </button>
+                )}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {toast && (
