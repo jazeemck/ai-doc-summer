@@ -69,7 +69,10 @@ export default function Chat() {
   const showToast = useCallback((message: string, type: 'success' | 'error') => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     setToast({ message, type });
-    toastTimerRef.current = setTimeout(() => setToast(null), 3500);
+    // Only auto-dismiss successes to let errors stay for debugging
+    if (type === 'success') {
+      toastTimerRef.current = setTimeout(() => setToast(null), 3500);
+    }
   }, []);
 
   const scrollToBottom = () => {
@@ -755,17 +758,28 @@ export default function Chat() {
       <AnimatePresence>
         {toast && (
           <motion.div
-            initial={{ y: 50, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: 50, opacity: 0 }}
-            className={`fixed bottom-40 right-10 z-[100] p-6 rounded-[2rem] border shadow-2xl backdrop-blur-3xl min-w-[300px] ${toast.type === 'success' ? 'bg-teal-950/20 border-teal-500/30 text-teal-300' : 'bg-red-950/20 border-red-500/30 text-red-300'
+            initial={{ y: 50, opacity: 0, scale: 0.95 }}
+            animate={{ y: 0, opacity: 1, scale: 1 }}
+            exit={{ y: 50, opacity: 0, scale: 0.95 }}
+            className={`fixed bottom-12 right-12 z-[100] p-6 rounded-[2.5rem] border shadow-2xl backdrop-blur-3xl max-w-xl min-w-[320px] ${toast.type === 'success' ? 'bg-teal-950/40 border-teal-500/30 text-teal-100' : 'bg-red-950/40 border-red-500/30 text-red-100'
               }`}
           >
-            <div className="flex items-center gap-4">
-              <div className={`w-10 h-10 rounded-2xl flex items-center justify-center ${toast.type === 'success' ? 'bg-teal-500/20' : 'bg-red-500/20'}`}>
-                {toast.type === 'success' ? <CheckCircle2 size={24} /> : <AlertCircle size={24} />}
+            <div className="flex items-start gap-6">
+              <div className={`w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0 ${toast.type === 'success' ? 'bg-teal-500/20' : 'bg-red-500/20'}`}>
+                {toast.type === 'success' ? <CheckCircle2 size={24} className="text-teal-400" /> : <AlertCircle size={24} className="text-red-400" />}
               </div>
-              <p className="font-black uppercase tracking-widest text-xs">{toast.message}</p>
+              <div className="flex-1 pt-1.5">
+                <p className="font-black uppercase tracking-[0.2em] text-[10px] mb-2 opacity-60">
+                  {toast.type === 'success' ? 'Neural Sync Confirmed' : 'Neural Link Error'}
+                </p>
+                <p className="font-bold text-sm leading-relaxed whitespace-pre-wrap">{toast.message}</p>
+              </div>
+              <button
+                onClick={() => setToast(null)}
+                className="p-2 -mr-2 hover:bg-white/10 rounded-full transition-all text-white/40 hover:text-white"
+              >
+                <X size={18} />
+              </button>
             </div>
           </motion.div>
         )}

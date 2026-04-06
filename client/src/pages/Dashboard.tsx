@@ -78,7 +78,7 @@ export default function Dashboard() {
         fetchDocuments();
       } catch (err: any) {
         console.error('[Dashboard] Sync Fail:', err.message);
-        toast.error(`Ingest Failed: ${err.message}`);
+        toast.error(`Ingest Failed: ${err.message}`, { duration: Infinity });
       }
     }
     setUploading(false);
