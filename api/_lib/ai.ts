@@ -1,9 +1,9 @@
-const DEFAULT_MODEL = 'gemini-1.5-flash';
+const DEFAULT_MODEL = 'gemini-2.0-flash';
 const EMBEDDING_MODEL = 'models/embedding-001';
 
 export const aiService = {
     /**
-     * Generates a streaming response from Gemini.
+     * Generates a streaming response from Gemini 2.0 Flash.
      */
     async generateContentStream(params: {
         model?: string;
@@ -11,65 +11,40 @@ export const aiService = {
         contents: any[];
     }) {
         const apiKey = process.env.GEMINI_API_KEY;
-        const requestedModel = params.model || DEFAULT_MODEL;
+        const modelName = params.model || DEFAULT_MODEL;
 
-        const attemptGeneration = async (model: string) => {
-            const url = `https://generativelanguage.googleapis.com/v1/models/${model}:streamGenerateContent?key=${apiKey}&alt=sse`;
+        // THING 1 & 3 — v1beta URL with gemini-2.0-flash
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?key=${apiKey}&alt=sse`;
 
-            // ── RESTRUCTURE: Merge systemInstruction into FIRST user message for maximum compatibility ──
-            const finalContents = JSON.parse(JSON.stringify(params.contents)); // Deep clone
-            if (params.systemInstruction && finalContents.length > 0) {
-                const firstPart = finalContents[0].parts?.[0];
-                if (firstPart && firstPart.text) {
-                    firstPart.text = `SYSTEM CONTEXT: ${params.systemInstruction}\n\n${firstPart.text}`;
-                }
-            } else if (params.systemInstruction) {
-                finalContents.unshift({ role: 'user', parts: [{ text: `SYSTEM CONTEXT: ${params.systemInstruction}` }] });
+        // THING 4 — Merged Request Body (NO separate systemInstruction or model field)
+        const mergedContents = JSON.parse(JSON.stringify(params.contents));
+        if (params.systemInstruction && mergedContents.length > 0) {
+            const firstPart = mergedContents[0].parts?.[0];
+            if (firstPart) {
+                firstPart.text = `${params.systemInstruction}\n\n${firstPart.text}`;
             }
-
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    contents: finalContents,
-                    safetySettings: [
-                        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-                        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-                        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-                        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
-                    ],
-                    generationConfig: {
-                        temperature: 0.7,
-                        maxOutputTokens: 2048,
-                    }
-                })
-            });
-
-            if (!response.ok) {
-                const errData = await response.json().catch(() => ({}));
-                throw new Error(errData.error?.message || response.statusText || `HTTP ${response.status}`);
-            }
-
-            return response.body!;
-        };
-
-        try {
-            console.log(`[NeuralAI] Primary Link: ${requestedModel}`);
-            const body = await attemptGeneration(requestedModel);
-            return this.makeAsyncIterator(body);
-        } catch (err: any) {
-            const fallbackModel = 'gemini-1.5-flash';
-            if (requestedModel !== fallbackModel) {
-                console.warn(`[NeuralAI] Primary Link Failed (${err.message}). Falling back to baseline...`);
-                try {
-                    const body = await attemptGeneration(fallbackModel);
-                    return this.makeAsyncIterator(body);
-                } catch (fallbackErr: any) {
-                    throw new Error(`Neural Link Offline: ${fallbackErr.message}`);
-                }
-            }
-            throw new Error(`Neural Link Offline: ${err.message}`);
+        } else if (params.systemInstruction) {
+            mergedContents.unshift({ role: 'user', parts: [{ text: params.systemInstruction }] });
         }
+
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: mergedContents,
+                generationConfig: {
+                    temperature: 0.7,
+                    maxOutputTokens: 2048,
+                }
+            })
+        });
+
+        if (!response.ok) {
+            const errData = await response.json().catch(() => ({}));
+            throw new Error(errData.error?.message || response.statusText || `Neural failure: ${response.status}`);
+        }
+
+        return this.makeAsyncIterator(response.body!);
     },
 
     async *makeAsyncIterator(stream: ReadableStream) {
@@ -92,17 +67,8 @@ export const aiService = {
                             const jsonStr = line.replace('data: ', '');
                             if (jsonStr.trim() === '[DONE]') continue;
                             const data = JSON.parse(jsonStr);
-
-                            const candidate = data.candidates?.[0];
-                            const text = candidate?.content?.parts?.[0]?.text;
-
-                            if (text) {
-                                yield { text };
-                            } else if (candidate?.finishReason && candidate.finishReason !== 'STOP') {
-                                yield { text: `[Neural link interrupted: Model reported finishReason ${candidate.finishReason}]` };
-                            } else if (data.promptFeedback?.blockReason) {
-                                yield { text: `[Content Blocked: The neural grid flagged this request as ${data.promptFeedback.blockReason}]` };
-                            }
+                            const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                            if (text) yield { text };
                         } catch (e) { }
                     }
                 }
@@ -112,85 +78,49 @@ export const aiService = {
         }
     },
 
-    /**
-     * COMPATIBILITY WRAPPER: Implements v1:embedText fallback
-     */
     async generateEmbedding(text: string): Promise<number[] | null> {
         const apiKey = process.env.GEMINI_API_KEY;
-        console.log(`[AI] Handshaking with Neural Model: ${EMBEDDING_MODEL}`);
-
         try {
-            // Priority: User Specified REST Path
-            const url = `https://generativelanguage.googleapis.com/v1/${EMBEDDING_MODEL}:embedText?key=${apiKey}`;
+            const url = `https://generativelanguage.googleapis.com/v1/models/embedding-001:embedContent?key=${apiKey}`;
             const response = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    model: EMBEDDING_MODEL,
-                    text: text.substring(0, 30000)
+                    model: 'models/embedding-001',
+                    content: { parts: [{ text: text.substring(0, 30000) }] }
                 })
             });
-
             const data = await response.json();
-            if (data.error) throw new Error(data.error.message);
-
-            console.log('[AI] Neural Response Verified (v1:embedText)');
             return data.embedding?.values || null;
-
-        } catch (err: any) {
-            console.warn('[AI] Primary Handshake Failed, falling back to v1beta...', err.message);
-            try {
-                const fallbackUrl = `https://generativelanguage.googleapis.com/v1beta/${EMBEDDING_MODEL}:embedContent?key=${apiKey}`;
-                const response = await fetch(fallbackUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        content: { parts: [{ text: text.substring(0, 30000) }] }
-                    })
-                });
-                const data = await response.json();
-                return data.embedding?.values || null;
-            } catch (fallbackErr) {
-                console.error('[AI] All Neural Pathways Interrupted. Skipping Embedding.');
-                return null;
-            }
+        } catch {
+            return null;
         }
     },
 
     async generateEmbeddingsBatch(chunks: string[]): Promise<number[][]> {
         if (chunks.length === 0) return [];
         const apiKey = process.env.GEMINI_API_KEY;
-        console.log(`[AI] Batch Processing ${chunks.length} nodes using ${EMBEDDING_MODEL}`);
-
         try {
             const results: number[][] = [];
-            const subBatchSize = 50; // API Payload Limit Safety
-
+            const subBatchSize = 100;
             for (let i = 0; i < chunks.length; i += subBatchSize) {
                 const subBatch = chunks.slice(i, i + subBatchSize);
-                const url = `https://generativelanguage.googleapis.com/v1beta/${EMBEDDING_MODEL}:batchEmbedContents?key=${apiKey}`;
+                const url = `https://generativelanguage.googleapis.com/v1/models/embedding-001:batchEmbedContents?key=${apiKey}`;
                 const requests = subBatch.map(text => ({
-                    model: EMBEDDING_MODEL,
+                    model: 'models/embedding-001',
                     content: { parts: [{ text: text.substring(0, 30000) }] }
                 }));
-
                 const response = await fetch(url, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ requests })
                 });
-
                 const data = await response.json();
-                if (data.error) throw new Error(data.error.message);
-
                 const embeddings = data.embeddings?.map((e: any) => e.values) || [];
                 results.push(...embeddings);
             }
-
             return results;
-
-        } catch (err: any) {
-            console.warn('[AI] Batch Neural Sync Interrupted. Switching to Sequential Fallback...', err.message);
+        } catch {
             const results: number[][] = [];
             for (const chunk of chunks) {
                 const vector = await this.generateEmbedding(chunk);
