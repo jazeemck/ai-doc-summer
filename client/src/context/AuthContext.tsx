@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
 import api from '../lib/api';
 
 interface User {
@@ -61,7 +61,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem('token');
     setToken(null);
     setUser(null);
-  });
+  };
 
   return (
     <AuthContext.Provider value={{ user, token, loading, login, register, logout }}>
