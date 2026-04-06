@@ -119,16 +119,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                             }
 
                             bgStep = "VECTOR_TRANSACTION";
-                            await prisma.$transaction(
-                                chunks.map((chunk, i) => {
-                                    if (!embeddings[i]) return prisma.$executeRaw`SELECT 1`; // Skip if no embedding for this row
-                                    const vectorStr = `[${embeddings[i].join(',')}]`;
-                                    return prisma.$executeRawUnsafe(`
-                                        INSERT INTO "Chunk" (id, content, "documentId", embedding, "userId")
-                                        VALUES ('${randomUUID()}', ${JSON.stringify(chunk)}, '${document.id}', '${vectorStr}'::vector, '${req.user.id}')
-                                    `);
-                                })
-                            );
+                            const insertPromises = chunks.map((chunk, i) => {
+                                const id = randomUUID();
+                                const embedding = embeddings[i] || new Array(768).fill(0);
+                                const vectorStr = `[${embedding.join(',')}]`;
+
+                                return prisma.$executeRawUnsafe(
+                                    `INSERT INTO "Chunk" (id, content, "documentId", embedding, "userId") VALUES ($1, $2, $3, $4::vector, $5)`,
+                                    id, chunk, document.id, vectorStr, req.user.id
+                                );
+                            });
+
+                            await prisma.$transaction(insertPromises);
 
                             await prisma.document.update({ where: { id: document.id }, data: { status: 'COMPLETED' } });
                             console.log(`[NeuralUpload] SUCCESS: ${chunks.length} nodes integrated for document ${document.id}`);
