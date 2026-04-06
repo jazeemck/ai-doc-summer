@@ -40,6 +40,7 @@ import multer from 'multer';
 export const config = {
     api: {
         bodyParser: false,
+        sizeLimit: "10mb",
     },
 };
 
