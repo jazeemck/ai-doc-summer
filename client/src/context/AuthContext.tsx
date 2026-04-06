@@ -1,59 +1,70 @@
-import { createContext, useContext, useState, useEffect } from 'react';
-import type { ReactNode } from 'react';
-import type { Session, User } from '@supabase/supabase-js';
-import { supabase } from '../lib/supabaseClient';
+import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import api from '../lib/api';
+
+interface User {
+  id: string;
+  email: string;
+  name?: string;
+  [key: string]: any;
+}
 
 interface AuthContextType {
   user: User | null;
-  session: Session | null;
+  token: string | null;
   loading: boolean;
-  logout: () => Promise<void>;
+  login: (email: string, password: string) => Promise<void>;
+  register: (email: string, password: string, name: string) => Promise<void>;
+  logout: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [session, setSession] = useState<Session | null>(null);
+  const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
   const [loading, setLoading] = useState(true);
 
+  // 1. NEURAL SYNC ON MOUNT
   useEffect(() => {
-    // 1. Fetch initial session
-    const fetchSession = async () => {
-      const { data: { session }, error } = await supabase.auth.getSession();
-      if (error) console.error('Error fetching session:', error.message);
-      
-      setSession(session);
-      setUser(session?.user ?? null);
+    const fetchMe = async () => {
+      const storedToken = localStorage.getItem('token');
+      if (storedToken) {
+        try {
+          const { data } = await api.get('/auth/me');
+          setUser(data);
+        } catch (err) {
+          console.error('[AuthContext] Session expired.');
+          localStorage.removeItem('token');
+          setToken(null);
+        }
+      }
       setLoading(false);
     };
-
-    fetchSession();
-
-    // 2. Listen for auth changes (login, logout, token refresh)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      setLoading(false);
-    });
-
-    // Cleanup subscription
-    return () => {
-      subscription.unsubscribe();
-    };
+    fetchMe();
   }, []);
 
-  const logout = async () => {
-    try {
-      const { error } = await supabase.auth.signOut();
-      if (error) throw error;
-    } catch (err: any) {
-      console.error('Error logging out:', err.message);
-    }
+  const login = async (email: string, password: string) => {
+    const { data } = await api.post('/auth/login', { email, password });
+    localStorage.setItem('token', data.token);
+    setToken(data.token);
+    setUser(data.user);
   };
 
+  const register = async (email: string, password: string, name: string) => {
+    const { data } = await api.post('/auth/register', { email, password, name });
+    localStorage.setItem('token', data.token);
+    setToken(data.token);
+    setUser(data.user);
+  };
+
+  const logout = () => {
+    localStorage.removeItem('token');
+    setToken(null);
+    setUser(null);
+  });
+
   return (
-    <AuthContext.Provider value={{ user, session, loading, logout }}>
+    <AuthContext.Provider value={{ user, token, loading, login, register, logout }}>
       {children}
     </AuthContext.Provider>
   );
@@ -61,8 +72,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 export function useAuth() {
   const context = useContext(AuthContext);
-  if (context === undefined) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
+  if (!context) throw new Error('useAuth must be used within AuthProvider');
   return context;
 }

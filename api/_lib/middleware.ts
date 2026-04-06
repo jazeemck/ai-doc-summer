@@ -1,17 +1,11 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
-import { createClient } from '@supabase/supabase-js';
-
-// Shared Supabase Client
-const supabase = createClient(
-    process.env.SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+import { auth } from './auth';
 
 /**
- * PRODUCTION HARDENED: Shared CORS & Auth Security Layer
+ * PRODUCTION HARDENED: Shared CORS & Local Auth Security Layer
  */
 export async function withCORS(req: VercelRequest, res: VercelResponse, handler: Function) {
-    // 1. DYNAMIC ORIGIN GUARDIAN (Preview + Production Support)
+    // 1. DYNAMIC ORIGIN GUARDIAN
     const allowedOrigins = [
         'https://ai-doc-summer.vercel.app',
         /https:\/\/ai-doc-summer-.*\.vercel\.app/
@@ -33,13 +27,24 @@ export async function withCORS(req: VercelRequest, res: VercelResponse, handler:
         return;
     }
 
-    // 3. Identity Pulse Injection
+    // 3. NATIVE IDENTITY INJECTION
     const authHeader = req.headers.authorization;
     if (authHeader?.startsWith('Bearer ')) {
         const token = authHeader.split(' ')[1];
-        const { data: { user }, error } = await supabase.auth.getUser(token);
-        if (!error && user) {
+        const user = auth.verifyToken(token);
+        if (user) {
             (req as any).user = user;
+        }
+    } else if (req.headers.cookie) {
+        // Also support token from cookies (HttpOnly flow)
+        const token = req.headers.cookie
+            .split(';')
+            .find(c => c.trim().startsWith('token='))
+            ?.split('=')[1];
+
+        if (token) {
+            const user = auth.verifyToken(token);
+            if (user) (req as any).user = user;
         }
     }
 
