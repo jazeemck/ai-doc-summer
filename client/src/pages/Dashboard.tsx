@@ -253,7 +253,7 @@ export default function Dashboard() {
                         <FileText size={24} className="text-teal-400" />
                       </div>
                       <div>
-                        <p className="text-lg font-black text-white tracking-tight truncate max-w-sm">{doc.name}</p>
+                        <p className="text-lg font-black text-white tracking-tight truncate max-sm">{doc.name}</p>
                         <div className="flex items-center gap-4 mt-1">
                           <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{formatSize(doc.size)}</span>
                           <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{new Date(doc.createdAt).toLocaleDateString()}</span>
