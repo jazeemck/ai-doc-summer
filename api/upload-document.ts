@@ -1,3 +1,10 @@
+export const config = {
+    api: {
+        bodyParser: false,
+        sizeLimit: "10mb",
+    },
+};
+
 // ── POLYFILLS: Required for pdf-parse / pdfjs-dist in Node.js serverless ──
 if (typeof globalThis.DOMMatrix === 'undefined') {
     (globalThis as any).DOMMatrix = class DOMMatrix {
@@ -35,14 +42,8 @@ import { withCORS } from './_lib/middleware';
 import { saveDocumentToDB } from './_lib/db';
 import { callGeminiCascade } from './_lib/gemini';
 import { uploadToStorage, getPublicUrl } from './_lib/storage';
+import { extractPdfText } from "./lib/pdfExtract";
 import multer from 'multer';
-
-export const config = {
-    api: {
-        bodyParser: false,
-        sizeLimit: "10mb",
-    },
-};
 
 // ── Multer: in-memory, 10 MB cap ─────────────────────────────────────────
 const uploadMiddleware = multer({
@@ -67,10 +68,7 @@ async function extractTextFromFile(
 ): Promise<string> {
     if (mimeType === 'application/pdf' || fileName.endsWith('.pdf')) {
         console.log('[UploadDoc] Extracting text from PDF...');
-        const pdfParseModule = require('pdf-parse');
-        const pdfParse = pdfParseModule.default || pdfParseModule;
-        const parsed = await pdfParse(buffer);
-        return parsed.text;
+        return await extractPdfText(buffer);
     }
 
     if (
