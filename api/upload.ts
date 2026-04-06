@@ -47,7 +47,7 @@ export const config = {
 
 const upload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: 4.5 * 1024 * 1024 }
+    limits: { fileSize: 10 * 1024 * 1024 } // 10MB
 }).any();
 
 function runMiddleware(req: any, res: any, fn: any) {
@@ -73,25 +73,44 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             await runMiddleware(req, res, upload);
 
             const files = req.files as any[];
+            console.log(`[Upload] Multer processed. Files array length: ${files?.length || 0}`);
+            if (files && files.length > 0) {
+                files.forEach((f: any, i: number) => {
+                    console.log(`[Upload] File[${i}]: field="${f.fieldname}", name="${f.originalname}", size=${f.size}, mime="${f.mimetype}", hasBuffer=${!!f.buffer}`);
+                });
+            }
+
             if (!files || files.length === 0) {
-                return res.status(400).json({ error: 'No File Received.', step: currentStep });
+                console.error(`[Upload] FAIL: No files in request. Check frontend FormData field name.`);
+                return res.status(400).json({ error: 'No File Received. Ensure the file is sent as multipart/form-data.', step: currentStep });
             }
 
             const file = files[0];
-            console.log(`[Upload] File received: ${file.originalname} | Size: ${file.size} bytes | Type: ${file.mimetype}`);
+            if (!file.buffer || file.buffer.length === 0) {
+                console.error(`[Upload] FAIL: File buffer is empty.`);
+                return res.status(400).json({ error: 'File buffer is empty. The file may be corrupted.', step: currentStep });
+            }
+
+            console.log(`[Upload] ✅ File accepted: ${file.originalname} | ${file.size} bytes | Buffer: ${file.buffer.length} bytes`);
 
             // ── STEP 3: PDF TEXT EXTRACTION ─────────────────────
             currentStep = "TEXT_EXTRACTION";
             let rawText = '';
 
             try {
+                console.log(`[Upload] Starting PDF text extraction...`);
                 const pdfParse = require('pdf-parse');
                 const pdfData = await pdfParse(file.buffer);
                 rawText = (pdfData.text || '').trim();
+                console.log(`[Upload] ✅ PDF parsed. Pages: ${pdfData.numpages}, Text length: ${rawText.length}`);
             } catch (parseErr: any) {
-                console.error(`[Upload] PDF parse error:`, parseErr.message);
+                console.error(`[Upload] ❌ PDF parse error:`, parseErr.message);
+                // Provide user-friendly error
+                const errorMsg = parseErr.message.includes('DOMMatrix') || parseErr.message.includes('Path2D')
+                    ? 'Server environment error during PDF processing. Please try again.'
+                    : `PDF extraction failed: ${parseErr.message}`;
                 return res.status(400).json({
-                    error: `PDF extraction failed: ${parseErr.message}. The file may be corrupted or password-protected.`,
+                    error: errorMsg,
                     step: currentStep
                 });
             }

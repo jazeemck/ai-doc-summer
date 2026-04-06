@@ -292,7 +292,8 @@ export default function Chat() {
 
     try {
       const formData = new FormData();
-      formData.append('files', file);
+      formData.append('file', file);
+      console.log(`[Chat] Uploading: ${file.name} | Size: ${file.size} bytes | Type: ${file.type}`);
 
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
@@ -305,18 +306,20 @@ export default function Chat() {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || 'Upload failed');
+        console.error('[Chat] Upload error response:', errorData);
+        throw new Error(errorData.error || `Upload failed (${response.status})`);
       }
 
       const result = await response.json();
+      console.log('[Chat] Upload success response:', result);
 
       if (result.status === 'completed' || result.status === 'processing') {
-        // Refresh library to see the new document
         await loadLibraryDocuments();
 
         if (result.status === 'completed') {
           setDocumentId(result.documentId);
-          showToast(`Success! ${file.name} is now online.`, 'success');
+          const debugInfo = result.debug ? ` (${result.debug.totalChunks} chunks, ${result.debug.textLength} chars)` : '';
+          showToast(`Success! ${file.name} is now online.${debugInfo}`, 'success');
         } else {
           showToast(`${file.name} is synchronizing...`, 'success');
         }
@@ -636,9 +639,9 @@ export default function Chat() {
                       <div className="glass-card p-6 rounded-[2rem] rounded-tl-sm border border-white/10 shadow-2xl text-slate-200 text-base leading-relaxed transition-all hover:border-white/20 group/msg relative">
                         {msg.sourceType && (
                           <div className={`mb-3 inline-flex items-center gap-2 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${msg.sourceType === 'doc' ? 'bg-teal-500/20 text-teal-400 border border-teal-500/30' :
-                              msg.sourceType === 'casual' ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30' :
-                                msg.sourceType === 'wiki' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' :
-                                  'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                            msg.sourceType === 'casual' ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30' :
+                              msg.sourceType === 'wiki' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' :
+                                'bg-blue-500/20 text-blue-400 border border-blue-500/30'
                             }`}>
                             {msg.sourceType === 'doc' ? '📄 Document Answer' :
                               msg.sourceType === 'casual' ? '💬 Casual' :
