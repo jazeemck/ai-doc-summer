@@ -1,11 +1,11 @@
 /**
  * Gemini Model Cascade — Document Analysis
- * Tries gemini-2.0-flash → gemini-1.5-flash
+ * Tries gemini-1.5-flash → gemini-2.0-flash
  */
 
 const GEMINI_MODELS = [
-    'gemini-2.0-flash',
     'gemini-1.5-flash',
+    'gemini-2.0-flash',
 ] as const;
 
 export type GeminiDocumentResult = {

@@ -1,9 +1,11 @@
-const DEFAULT_MODEL = 'gemini-2.0-flash';
+const DEFAULT_MODEL = 'gemini-1.5-flash';
+const CASCADE_MODELS = ['gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-2.0-flash'];
 const EMBEDDING_MODEL = 'models/embedding-001';
 
 export const aiService = {
     /**
-     * Generates a streaming response from Gemini 2.0 Flash.
+     * Generates a streaming response from Gemini.
+     * Implements a cascade fallback if quota is exceeded.
      */
     async generateContentStream(params: {
         model?: string;
@@ -11,40 +13,65 @@ export const aiService = {
         contents: any[];
     }) {
         const apiKey = process.env.GEMINI_API_KEY;
-        const modelName = params.model || DEFAULT_MODEL;
+        const requestedModel = params.model;
+        const modelsToTry = requestedModel ? [requestedModel, ...CASCADE_MODELS.filter(m => m !== requestedModel)] : CASCADE_MODELS;
 
-        // THING 1 & 3 — v1beta URL with gemini-2.0-flash
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?key=${apiKey}&alt=sse`;
+        let lastError: any = null;
 
-        // THING 4 — Merged Request Body (NO separate systemInstruction or model field)
-        const mergedContents = JSON.parse(JSON.stringify(params.contents));
-        if (params.systemInstruction && mergedContents.length > 0) {
-            const firstPart = mergedContents[0].parts?.[0];
-            if (firstPart) {
-                firstPart.text = `${params.systemInstruction}\n\n${firstPart.text}`;
-            }
-        } else if (params.systemInstruction) {
-            mergedContents.unshift({ role: 'user', parts: [{ text: params.systemInstruction }] });
-        }
+        for (const modelName of modelsToTry) {
+            try {
+                console.log(`[NeuralAI] Attempting generation with model: ${modelName}`);
+                // Use v1beta for 2.0 and v1 for 1.5, or just v1beta for all (v1beta supports 1.5 too)
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?key=${apiKey}&alt=sse`;
 
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                contents: mergedContents,
-                generationConfig: {
-                    temperature: 0.7,
-                    maxOutputTokens: 2048,
+                // Merged Request Body (NO separate systemInstruction or model field)
+                const mergedContents = JSON.parse(JSON.stringify(params.contents));
+                if (params.systemInstruction && mergedContents.length > 0) {
+                    const firstPart = mergedContents[0].parts?.[0];
+                    if (firstPart) {
+                        firstPart.text = `${params.systemInstruction}\n\n${firstPart.text}`;
+                    }
+                } else if (params.systemInstruction) {
+                    mergedContents.unshift({ role: 'user', parts: [{ text: params.systemInstruction }] });
                 }
-            })
-        });
 
-        if (!response.ok) {
-            const errData = await response.json().catch(() => ({}));
-            throw new Error(errData.error?.message || response.statusText || `Neural failure: ${response.status}`);
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: mergedContents,
+                        generationConfig: {
+                            temperature: 0.7,
+                            maxOutputTokens: 2048,
+                        }
+                    })
+                });
+
+                if (!response.ok) {
+                    const errData = await response.json().catch(() => ({}));
+                    const msg = errData.error?.message || response.statusText || `Neural failure: ${response.status}`;
+
+                    // If quota exceeded or limit 0, try next model
+                    if (response.status === 429 || msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('limit')) {
+                        console.warn(`[NeuralAI] ${modelName} failed (quota/limit). Trying fallback...`);
+                        lastError = new Error(msg);
+                        continue;
+                    }
+                    throw new Error(msg);
+                }
+
+                console.log(`[NeuralAI] Model ${modelName} connected successfully.`);
+                return this.makeAsyncIterator(response.body!);
+            } catch (err: any) {
+                lastError = err;
+                if (err.message.toLowerCase().includes('quota') || err.message.toLowerCase().includes('limit')) {
+                    continue;
+                }
+                throw err;
+            }
         }
 
-        return this.makeAsyncIterator(response.body!);
+        throw new Error(`Neural failure: All model paths exhausted. Last error: ${lastError?.message}`);
     },
 
     async *makeAsyncIterator(stream: ReadableStream) {
