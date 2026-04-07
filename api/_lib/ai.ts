@@ -1,5 +1,5 @@
-const DEFAULT_MODEL = 'gemini-1.5-flash';
-const CASCADE_MODELS = ['gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-2.0-flash'];
+const DEFAULT_MODEL = 'gemini-2.5-flash';
+const CASCADE_MODELS = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash', 'gemma-3-4b-it'];
 const EMBEDDING_MODEL = 'models/embedding-001';
 
 export const aiService = {
